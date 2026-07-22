@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+dist/
+build/
+
+# Job artifacts
+backend/data/jobs/*/
+!backend/data/jobs/.gitkeep
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.env
+.env.local
+
+# Audio / large binaries
+*.wav
+*.mp3
+*.flac
+!frontend/public/**
+
+# uv
+# keep uv.lock committed for reproducible installs
