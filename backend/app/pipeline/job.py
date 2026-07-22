@@ -98,20 +98,28 @@ def run_job(
 
     extractor = HandcraftedExtractor()
 
-    def feat_prog(frac: float, msg: str, base: float, span: float) -> None:
-        prog("features", base + frac * span, msg)
-
     prog("features", 30, "Embedding target")
-    target_emb = extractor.embed_batch(
-        target_segs,
+    target_emb = extractor.embed_segments(
+        target_y,
         sr,
-        on_progress=lambda f, m: feat_prog(f, m, 30, 15),
+        target_segs,
+        on_progress=lambda f, m: prog("features", 30 + f * 15, m),
     )
     prog("features", 48, "Embedding sources")
-    source_emb = extractor.embed_batch(
-        source_segs,
-        sr,
-        on_progress=lambda f, m: feat_prog(f, m, 48, 25),
+    source_emb_parts: list[np.ndarray] = []
+    for i, (sid, y) in enumerate(sources_y):
+        segs_i = [s for s in source_segs if s.song_id == sid]
+        part = extractor.embed_segments(
+            y,
+            sr,
+            segs_i,
+            on_progress=lambda f, m, i=i: prog(
+                "features", 48 + (i + f) / 5 * 25, f"source {sid}: {m}"
+            ),
+        )
+        source_emb_parts.append(part)
+    source_emb = (
+        np.vstack(source_emb_parts) if source_emb_parts else np.zeros((0, 54), np.float32)
     )
 
     prog("index", 75, "Building FAISS index")
