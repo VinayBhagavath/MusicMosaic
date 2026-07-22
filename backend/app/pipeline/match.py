@@ -105,12 +105,19 @@ def match_sequence(
     path_k = np.empty(n, dtype=np.int32)
     path_k[-1] = int(np.argmin(dp[-1]))
     for t in range(n - 2, -1, -1):
-        path_k[t] = back[t + 1, path_k[t + 1]]
+        prev = int(back[t + 1, path_k[t + 1]])
+        path_k[t] = prev if prev >= 0 else 0
 
     tiles: list[TileMatch] = []
     for t in range(n):
         j = int(path_k[t])
+        if j < 0 or j >= k:
+            j = 0
         sid = int(ids[t, j])
+        if sid < 0:
+            sid = int(ids[t, 0])
+        if sid < 0:
+            raise RuntimeError(f"No FAISS match for target frame {t}")
         meta = source.meta[sid]
         tiles.append(
             TileMatch(

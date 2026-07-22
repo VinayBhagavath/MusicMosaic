@@ -5,6 +5,7 @@ import {
   getJob,
   getMosaic,
   targetUrl,
+  type AudioInput,
   type JobParams,
   type Mosaic,
   type MosaicTile,
@@ -30,30 +31,40 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [mosaic, setMosaic] = useState<Mosaic | null>(null)
   const [selected, setSelected] = useState<MosaicTile | null>(null)
-  const [useTarget, setUseTarget] = useState(false)
 
   const hop = mosaic?.hop_s ?? 0.25
   const dur = mosaic?.duration_s ?? 0
   const playback = useSyncedPlayback(hop, dur)
 
-  const onSubmit = useCallback(async (target: File, sources: File[], params: JobParams) => {
-    setPhase('running')
-    setError(null)
-    setPct(2)
-    setStage('queued')
-    setMessage('Uploading…')
-    try {
-      const id = await createJob(target, sources, params)
-      setJobId(id)
-    } catch (e) {
-      setPhase('error')
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
+  const onSubmit = useCallback(
+    async (target: AudioInput, sources: AudioInput[], params: JobParams) => {
+      setPhase('running')
+      setError(null)
+      setPct(2)
+      setStage('queued')
+      setMessage('Uploading…')
+      try {
+        const id = await createJob(target, sources, params)
+        setJobId(id)
+      } catch (e) {
+        setPhase('error')
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
     if (!jobId || phase !== 'running') return
+    let ticks = 0
     const id = setInterval(async () => {
+      ticks += 1
+      if (ticks > 900) {
+        // ~6 min
+        setPhase('error')
+        setError('Timed out waiting for reconstruction')
+        return
+      }
       try {
         const st = await getJob(jobId)
         setPct(st.pct)
@@ -77,7 +88,9 @@ export default function App() {
 
   return (
     <div className="app">
-      {phase === 'upload' && <UploadPanel onSubmit={onSubmit} busy={false} />}
+      {phase === 'upload' && (
+        <UploadPanel onSubmit={onSubmit} busy={phase !== 'upload'} />
+      )}
 
       {phase === 'running' && (
         <ReconstructingView pct={pct} message={message} stage={stage} />
@@ -110,18 +123,15 @@ export default function App() {
           />
           <TimelineStrip mosaic={mosaic} time={playback.time} onSeek={playback.seek} />
           <PlaybackBar
-            audioRef={playback.audioRef}
+            mosaicRef={playback.mosaicRef}
+            targetRef={playback.targetRef}
             src={audioUrl(jobId)}
             targetSrc={targetUrl(jobId)}
             playing={playback.playing}
             time={playback.time}
             duration={dur}
-            useTarget={useTarget}
-            onToggleSource={() => {
-              const t = playback.time
-              setUseTarget((v) => !v)
-              requestAnimationFrame(() => playback.seek(t))
-            }}
+            useTarget={playback.useTarget}
+            onToggleSource={playback.toggleSource}
             onPlay={playback.play}
             onPause={playback.pause}
             onSeek={playback.seek}
@@ -132,6 +142,7 @@ export default function App() {
             <TileDetail
               tile={selected}
               songs={mosaic.songs}
+              windowS={mosaic.window_s}
               hopS={mosaic.hop_s}
               onSeekTo={playback.seek}
               onClose={() => setSelected(null)}

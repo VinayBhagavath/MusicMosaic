@@ -164,10 +164,16 @@ body {
   border-color: var(--ink);
 }
 
-.drop input {
+.drop input[type='file'] {
   position: absolute;
   inset: 0;
   opacity: 0;
+  cursor: pointer;
+}
+
+.file-hit {
+  position: relative;
+  display: block;
   cursor: pointer;
 }
 
@@ -177,6 +183,30 @@ body {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-soft);
+}
+
+.file-hit input[type='file'] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.url-input {
+  margin-top: 0.35rem;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 0.45rem 0 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink);
+  outline: none;
+}
+
+.url-input::placeholder {
+  color: #b0aaa0;
 }
 
 .drop-file {

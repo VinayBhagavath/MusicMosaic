@@ -6,18 +6,17 @@ Reconstruct one song using only short clips from five other songs.
 
 ```bash
 npm install
+cd backend && uv sync --extra dev && cd ..
 npm run dev
 ```
 
-That starts the FastAPI backend and the Vite frontend together. Open **http://localhost:5173**.
+Open **http://localhost:5173**.
+
+Each slot accepts an **MP3 upload** or a **YouTube URL** (yt-dlp → mp3; needs ffmpeg + network).
 
 **Requirements:** Node 20+, Python 3.11+, [uv](https://github.com/astral-sh/uv), ffmpeg.
 
-First time only — sync Python deps:
-
-```bash
-cd backend && uv sync --extra dev && cd ..
-```
+Tracks must be **5 seconds–8 minutes**.
 
 ### CLI (no UI)
 
@@ -34,11 +33,11 @@ npm test
 
 ## Demo
 
-1. Drop one **target** MP3 and five **source** MP3s.
-2. Watch the splice + quilt fill animation while it reconstructs.
-3. Play the mosaic — tiles light in sync; toggle target vs reconstruction.
+1. Drop MP3s **or** paste YouTube links for 1 target + 5 sources.
+2. Watch the splice + quilt fill animation.
+3. Play the mosaic; toggle target vs reconstruction.
 4. Click a tile for source timestamp + similarity.
 
 ## Stack
 
-FastAPI · librosa · FAISS · Viterbi matching · React · Vite
+FastAPI · librosa · FAISS · Viterbi · yt-dlp · React · Vite

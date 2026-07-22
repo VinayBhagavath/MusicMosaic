@@ -3,6 +3,7 @@ import type { MosaicTile, MosaicSong } from '../api/client'
 type Props = {
   tile: MosaicTile | null
   songs: MosaicSong[]
+  windowS: number
   hopS: number
   onSeekTo: (t: number) => void
   onClose: () => void
@@ -14,7 +15,7 @@ function fmt(s: number) {
   return `${m}:${sec}`
 }
 
-export function TileDetail({ tile, songs, hopS, onSeekTo, onClose }: Props) {
+export function TileDetail({ tile, songs, windowS, hopS, onSeekTo, onClose }: Props) {
   if (!tile) {
     return (
       <aside className="tile-detail">
@@ -50,7 +51,9 @@ export function TileDetail({ tile, songs, hopS, onSeekTo, onClose }: Props) {
       <button type="button" className="cta small" onClick={() => onSeekTo(tile.target_start_s)}>
         Jump to tile
       </button>
-      <p className="hint">Window ≈ {(hopS * 2).toFixed(2)}s · hop {hopS}s</p>
+      <p className="hint">
+        Window {windowS}s · hop {hopS}s
+      </p>
     </aside>
   )
 }

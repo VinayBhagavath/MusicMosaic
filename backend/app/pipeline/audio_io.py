@@ -19,10 +19,11 @@ def load_audio(path: str | Path, *, sr: int = SR) -> tuple[np.ndarray, int]:
     """Load mono float32 audio at `sr`. Raises ValueError on duration bounds."""
     y, file_sr = librosa.load(path, sr=sr, mono=True)
     dur = len(y) / sr
+    name = Path(path).name
     if dur < MIN_DURATION_S:
-        raise ValueError(f"Audio too short ({dur:.1f}s < {MIN_DURATION_S}s): {path}")
+        raise ValueError(f"Audio too short ({dur:.1f}s < {MIN_DURATION_S}s): {name}")
     if dur > MAX_DURATION_S:
-        raise ValueError(f"Audio too long ({dur:.1f}s > {MAX_DURATION_S}s): {path}")
+        raise ValueError(f"Audio too long ({dur:.1f}s > {MAX_DURATION_S}s): {name}")
     return y.astype(np.float32, copy=False), sr
 
 

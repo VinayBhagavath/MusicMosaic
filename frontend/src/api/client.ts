@@ -40,21 +40,35 @@ export type JobParams = {
   lambda_switch: number
 }
 
+export type AudioInput = {
+  file: File | null
+  url: string
+}
+
 const BASE = ''
 
 export async function createJob(
-  target: File,
-  sources: File[],
+  target: AudioInput,
+  sources: AudioInput[],
   params: JobParams,
 ): Promise<string> {
   const fd = new FormData()
-  fd.append('target', target)
-  sources.forEach((f, i) => fd.append(`source_${i}`, f))
+  if (target.url.trim()) fd.append('target_url', target.url.trim())
+  else if (target.file) fd.append('target', target.file)
+
+  sources.forEach((s, i) => {
+    if (s.url.trim()) fd.append(`source_${i}_url`, s.url.trim())
+    else if (s.file) fd.append(`source_${i}`, s.file)
+  })
+
   fd.append('window_s', String(params.window_s))
   fd.append('hop_s', String(params.hop_s))
   fd.append('lambda_switch', String(params.lambda_switch))
   const res = await fetch(`${BASE}/api/jobs`, { method: 'POST', body: fd })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
   const data = await res.json()
   return data.job_id as string
 }

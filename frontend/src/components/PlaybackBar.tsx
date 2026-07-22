@@ -1,5 +1,6 @@
 type Props = {
-  audioRef: React.RefObject<HTMLAudioElement | null>
+  mosaicRef: React.RefObject<HTMLAudioElement | null>
+  targetRef: React.RefObject<HTMLAudioElement | null>
   src: string
   targetSrc: string
   playing: boolean
@@ -22,7 +23,8 @@ function fmt(s: number) {
 }
 
 export function PlaybackBar({
-  audioRef,
+  mosaicRef,
+  targetRef,
   src,
   targetSrc,
   playing,
@@ -37,12 +39,8 @@ export function PlaybackBar({
 }: Props) {
   return (
     <div className="playback">
-      <audio
-        ref={audioRef}
-        src={useTarget ? targetSrc : src}
-        onEnded={onEnded}
-        preload="auto"
-      />
+      <audio ref={mosaicRef} src={src} preload="auto" onEnded={onEnded} />
+      <audio ref={targetRef} src={targetSrc} preload="auto" onEnded={onEnded} />
       <button type="button" className="cta small" onClick={playing ? onPause : onPlay}>
         {playing ? 'Pause' : 'Play'}
       </button>
