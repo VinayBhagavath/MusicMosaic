@@ -1,4 +1,4 @@
-"""Nearest-neighbor + Viterbi sequence matching with musical continuity."""
+"""Nearest-neighbor + Viterbi with literature-style target + join costs."""
 
 from __future__ import annotations
 
@@ -13,11 +13,15 @@ from app.pipeline.index import SourceIndex, SourceMeta
 @dataclass(slots=True)
 class MatchParams:
     top_k: int = 12
-    lambda_switch: float = 0.85  # prefer long runs from one song
-    lambda_jump: float = 0.45  # prefer nearby timestamps in same song
+    # Prefer long same-song runs (CATERPILLAR / Musical Mosaicing continuity)
+    lambda_switch: float = 1.15
+    lambda_jump: float = 0.55
     jump_norm_s: float = 2.0
     lambda_self: float = 0.02
-    lambda_concat: float = 0.35  # acoustic jump between consecutive chosen clips
+    # Whole-clip embedding discontinuity
+    lambda_concat: float = 0.25
+    # Boundary spectral join cost (Vepa & King style MFCC-edge distance)
+    lambda_join: float = 0.55
     hop_s: float = 0.5
 
 
@@ -46,17 +50,24 @@ def _transition_cost(
     b_id: int,
     params: MatchParams,
     concat_penalty: float,
+    join_penalty: float,
 ) -> float:
-    cost = concat_penalty
+    # Natural neighbors in the same song: near-zero join (unit-selection gold standard)
+    if (
+        a.song_id == b.song_id
+        and abs((a.start_s + params.hop_s) - b.start_s) < params.hop_s * 0.55
+    ):
+        return -0.25 + concat_penalty * 0.15  # strong reward for true continuity
+
+    cost = concat_penalty + join_penalty
     if a.song_id != b.song_id:
         cost += params.lambda_switch
     else:
         expected = a.start_s + params.hop_s
         jump = abs(b.start_s - expected)
         cost += params.lambda_jump * min(1.0, jump / params.jump_norm_s)
-        # Reward near-perfect temporal continuation
         if jump < params.hop_s * 0.6 and params.lambda_jump > 0:
-            cost -= 0.12
+            cost -= 0.15
     if a_id == b_id:
         cost += params.lambda_self
     return cost
@@ -67,9 +78,7 @@ def _count_transitions(song_ids: list[str]) -> int:
 
 
 def _concat_matrix(pack: EmbPack) -> np.ndarray:
-    """Pairwise acoustic discontinuity in [0, 2] (0 = identical)."""
-    # Blend chroma+timbre for boundary feel
-    c = 0.6 * (pack.chroma @ pack.chroma.T) + 0.4 * (pack.timbre @ pack.timbre.T)
+    c = 0.55 * (pack.chroma @ pack.chroma.T) + 0.45 * (pack.timbre @ pack.timbre.T)
     return (1.0 - c).astype(np.float32)
 
 
@@ -79,7 +88,6 @@ def match_sequence(
     source: SourceIndex,
     params: MatchParams | None = None,
 ) -> MatchResult:
-    """Top-k musical candidates + Viterbi with switch/jump/concat costs."""
     params = params or MatchParams()
     n = query.chroma.shape[0]
     if n == 0:
@@ -87,10 +95,11 @@ def match_sequence(
 
     sims, ids = source.search(query, k=params.top_k)
     k = sims.shape[1]
-    local = 1.0 - sims  # [n,k]
+    local = 1.0 - sims
 
-    concat = _concat_matrix(source.pack)  # [n_s, n_s]
+    concat = _concat_matrix(source.pack)
     lam_c = params.lambda_concat
+    lam_j = params.lambda_join
 
     dp = np.full((n, k), np.inf, dtype=np.float64)
     back = np.full((n, k), -1, dtype=np.int32)
@@ -109,9 +118,10 @@ def match_sequence(
                     continue
                 a_meta = source.meta[a_id]
                 cpen = lam_c * float(concat[a_id, b_id])
+                jpen = lam_j * source.join_distance(a_id, b_id)
                 c = (
                     dp[t - 1, i]
-                    + _transition_cost(a_meta, a_id, b_meta, b_id, params, cpen)
+                    + _transition_cost(a_meta, a_id, b_meta, b_id, params, cpen, jpen)
                     + local[t, j]
                 )
                 if c < best_c:

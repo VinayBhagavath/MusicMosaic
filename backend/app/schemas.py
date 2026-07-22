@@ -11,11 +11,12 @@ class JobParams(BaseModel):
     window_s: float = Field(1.0, ge=0.25, le=2.0)
     hop_s: float = Field(0.5, ge=0.1, le=1.0)
     top_k: int = Field(12, ge=1, le=32)
-    lambda_switch: float = Field(0.85, ge=0.0, le=2.0)
-    lambda_jump: float = Field(0.45, ge=0.0, le=2.0)
+    lambda_switch: float = Field(1.15, ge=0.0, le=2.0)
+    lambda_jump: float = Field(0.55, ge=0.0, le=2.0)
     jump_norm_s: float = Field(2.0, ge=0.1, le=30.0)
     lambda_self: float = Field(0.02, ge=0.0, le=1.0)
-    lambda_concat: float = Field(0.35, ge=0.0, le=2.0)
+    lambda_concat: float = Field(0.25, ge=0.0, le=2.0)
+    lambda_join: float = Field(0.55, ge=0.0, le=2.0)
 
     @model_validator(mode="after")
     def hop_not_longer_than_window(self) -> JobParams:

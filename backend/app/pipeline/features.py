@@ -111,7 +111,7 @@ class MusicalExtractor:
 class ClapHybridExtractor:
     """Key-invariant chroma + LAION CLAP music embeddings + energy."""
 
-    def __init__(self, *, batch_size: int = 8):
+    def __init__(self, *, batch_size: int = 16):
         self.base = MusicalExtractor()
         self.batch_size = batch_size
         self.name = "clap-hybrid"

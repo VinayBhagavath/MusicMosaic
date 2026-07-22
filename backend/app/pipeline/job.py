@@ -24,15 +24,16 @@ ProgressCb = Callable[[str, float, str], None]
 
 @dataclass
 class JobConfig:
-    # Longer windows + stronger continuity → more musical instrumentals, fewer tiles (faster)
+    # Longer windows + stronger continuity → more musical runs, fewer tiles (faster)
     window_s: float = 1.0
     hop_s: float = 0.5
     top_k: int = 12
-    lambda_switch: float = 0.85
-    lambda_jump: float = 0.45
+    lambda_switch: float = 1.15
+    lambda_jump: float = 0.55
     jump_norm_s: float = 2.0
     lambda_self: float = 0.02
-    lambda_concat: float = 0.35
+    lambda_concat: float = 0.25
+    lambda_join: float = 0.55
 
 
 @dataclass
@@ -147,7 +148,10 @@ def run_job(
     source_pack = _stack_packs([p for p in packs if p is not None])
 
     prog("index", 72, "Indexing source clips")
-    source_index = build_source_index(source_segs, source_pack)
+    songs_map = {sid: y for sid, y in sources_typed}  # type: ignore[misc]
+    source_index = build_source_index(
+        source_segs, source_pack, songs=songs_map, sr=sr, compute_edges=True
+    )
 
     prog("match", 78, "Matching sequence")
     target_starts = np.array([s.start_s for s in target_segs], dtype=np.float64)
@@ -158,6 +162,7 @@ def run_job(
         jump_norm_s=cfg.jump_norm_s,
         lambda_self=cfg.lambda_self,
         lambda_concat=cfg.lambda_concat,
+        lambda_join=cfg.lambda_join,
         hop_s=cfg.hop_s,
     )
     match = match_sequence(target_pack, target_starts, source_index, match_params)

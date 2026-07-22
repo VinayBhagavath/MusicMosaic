@@ -43,7 +43,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
   const [params, setParams] = useState<JobParams>({
     window_s: 1.0,
     hop_s: 0.5,
-    lambda_switch: 0.85,
+    lambda_switch: 1.15,
   })
 
   const [searchQ, setSearchQ] = useState('piano')

@@ -77,6 +77,7 @@ def test_viterbi_prefers_continuity_over_greedy_switch():
             lambda_jump=0.0,
             lambda_self=0.0,
             lambda_concat=0.0,
+            lambda_join=0.0,
             hop_s=0.5,
         ),
     )
@@ -90,6 +91,7 @@ def test_viterbi_prefers_continuity_over_greedy_switch():
             lambda_jump=0.1,
             lambda_self=0.0,
             lambda_concat=0.0,
+            lambda_join=0.0,
             hop_s=0.5,
         ),
     )

@@ -112,6 +112,7 @@ def _run(
             jump_norm_s=params.jump_norm_s,
             lambda_self=params.lambda_self,
             lambda_concat=params.lambda_concat,
+            lambda_join=params.lambda_join,
         )
         result = run_job(
             resolved_target,
@@ -151,11 +152,12 @@ async def create_job(
     window_s: float = Form(1.0),
     hop_s: float = Form(0.5),
     top_k: int = Form(12),
-    lambda_switch: float = Form(0.85),
-    lambda_jump: float = Form(0.45),
+    lambda_switch: float = Form(1.15),
+    lambda_jump: float = Form(0.55),
     jump_norm_s: float = Form(2.0),
     lambda_self: float = Form(0.02),
-    lambda_concat: float = Form(0.35),
+    lambda_concat: float = Form(0.25),
+    lambda_join: float = Form(0.55),
 ) -> JobCreateResponse:
     try:
         params = JobParams(
@@ -167,6 +169,7 @@ async def create_job(
             jump_norm_s=jump_norm_s,
             lambda_self=lambda_self,
             lambda_concat=lambda_concat,
+            lambda_join=lambda_join,
         )
     except ValidationError as e:
         raise HTTPException(422, e.errors()) from e
