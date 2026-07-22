@@ -8,15 +8,28 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class JobParams(BaseModel):
-    window_s: float = Field(1.0, ge=0.25, le=2.0)
-    hop_s: float = Field(0.5, ge=0.1, le=1.0)
-    top_k: int = Field(12, ge=1, le=32)
-    lambda_switch: float = Field(1.15, ge=0.0, le=2.0)
-    lambda_jump: float = Field(0.55, ge=0.0, le=2.0)
+    window_s: float = Field(0.45, ge=0.25, le=2.0)
+    hop_s: float = Field(0.22, ge=0.1, le=1.0)
+    top_k: int = Field(20, ge=1, le=32)
+    lambda_switch: float = Field(0.08, ge=0.0, le=2.0)
+    lambda_jump: float = Field(0.15, ge=0.0, le=2.0)
     jump_norm_s: float = Field(2.0, ge=0.1, le=30.0)
-    lambda_self: float = Field(0.02, ge=0.0, le=1.0)
-    lambda_concat: float = Field(0.25, ge=0.0, le=2.0)
-    lambda_join: float = Field(0.55, ge=0.0, le=2.0)
+    lambda_self: float = Field(0.03, ge=0.0, le=1.0)
+    lambda_concat: float = Field(0.55, ge=0.0, le=2.0)
+    lambda_join: float = Field(0.70, ge=0.0, le=2.0)
+    per_song_k: int = Field(4, ge=1, le=8)
+    lambda_balance: float = Field(0.0, ge=0.0, le=3.0)
+    max_share: float = Field(1.0, ge=0.15, le=1.0)
+    balance_iters: int = Field(1, ge=1, le=6)
+    min_run_tiles: int = Field(1, ge=1, le=12)
+    n_layers: int = Field(1, ge=1, le=5)
+    layer_primary_weight: float = Field(0.62, ge=0.35, le=1.0)
+    fidelity_first: bool = True
+    harmonic_match: bool = True
+    harmonic_strength: float = Field(0.55, ge=0.0, le=1.0)
+    onset_sync_xf: bool = True
+    rerank_spectral: bool = True
+    use_stems: bool = False
 
     @model_validator(mode="after")
     def hop_not_longer_than_window(self) -> JobParams:
@@ -39,6 +52,7 @@ class JobStatus(BaseModel):
         "features",
         "index",
         "match",
+        "stems",
         "reconstruct",
         "done",
         "error",

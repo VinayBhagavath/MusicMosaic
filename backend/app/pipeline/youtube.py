@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from app.pipeline.audio_io import MAX_DURATION_S, MIN_DURATION_S
 
@@ -14,6 +16,10 @@ _YT_RE = re.compile(
     re.IGNORECASE,
 )
 _SONG_WORDS = ("song", "songs", "music", "track", "tracks", "audio", "official")
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
+
+# Persistent cache so repeated Interstellar/demo runs skip yt-dlp entirely.
+_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "cache" / "youtube"
 
 
 def is_youtube_url(url: str) -> bool:
@@ -36,16 +42,83 @@ def normalize_youtube_url(url: str) -> str:
     return u
 
 
+def youtube_video_id(url: str) -> str | None:
+    """Extract a stable video id for cache keys."""
+    try:
+        u = normalize_youtube_url(url)
+        parsed = urlparse(u)
+        host = (parsed.hostname or "").lower()
+        if host in {"youtu.be", "www.youtu.be"}:
+            vid = parsed.path.lstrip("/").split("/")[0]
+            return vid if _ID_RE.match(vid) else None
+        qs = parse_qs(parsed.query)
+        if "v" in qs and qs["v"]:
+            vid = qs["v"][0]
+            return vid if _ID_RE.match(vid) else None
+        # /shorts/ID or /embed/ID
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+            return parts[1] if _ID_RE.match(parts[1]) else None
+    except Exception:
+        return None
+    return None
+
+
+def _cache_index_path() -> Path:
+    return _CACHE_DIR / "index.json"
+
+
+def _load_cache_index() -> dict:
+    path = _cache_index_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _save_cache_index(index: dict) -> None:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _cache_index_path().write_text(json.dumps(index, indent=2))
+
+
+def _cached_mp3(video_id: str) -> Path | None:
+    path = _CACHE_DIR / f"{video_id}.mp3"
+    return path if path.exists() and path.stat().st_size > 1024 else None
+
+
 def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path, str]:
-    """Download best audio as mp3 into dest_dir/{stem}.mp3. Returns (path, title)."""
+    """Download best audio as mp3 into dest_dir/{stem}.mp3. Returns (path, title).
+
+    Hits a content-addressed cache under ``backend/data/cache/youtube/{videoId}.mp3``
+    so repeated demo runs (same Interstellar + sources) skip the network.
+    """
+    url = normalize_youtube_url(url)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{stem}.mp3"
+    video_id = youtube_video_id(url)
+    index = _load_cache_index()
+
+    if video_id:
+        cached = _cached_mp3(video_id)
+        if cached is not None:
+            shutil.copy2(cached, dest)
+            title = str((index.get(video_id) or {}).get("title") or stem)
+            print(f"[musicmosaic] youtube cache hit {video_id}", flush=True)
+            return dest, title
+
     try:
         import yt_dlp
     except ImportError as e:
         raise RuntimeError("yt-dlp is not installed") from e
 
-    url = normalize_youtube_url(url)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    outtmpl = str(dest_dir / f"{stem}.%(ext)s")
+    # Download once into the cache (or dest if we have no video id), then copy.
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if video_id:
+        outtmpl = str(_CACHE_DIR / f"{video_id}.%(ext)s")
+    else:
+        outtmpl = str(dest_dir / f"{stem}.%(ext)s")
 
     opts: dict = {
         "format": "bestaudio/best",
@@ -65,7 +138,8 @@ def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        # Single network round-trip: extract + download together.
+        info = ydl.extract_info(url, download=True)
         if info is None:
             raise ValueError("Could not read YouTube video info")
         duration = float(info.get("duration") or 0)
@@ -74,7 +148,20 @@ def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path
         if duration and duration > MAX_DURATION_S:
             raise ValueError(f"Video too long ({duration:.0f}s; max {MAX_DURATION_S / 60:.0f} min)")
         title = str(info.get("title") or stem)
-        ydl.download([url])
+        if not video_id:
+            video_id = str(info.get("id") or "") or None
+
+    if video_id:
+        cached = _CACHE_DIR / f"{video_id}.mp3"
+        if not cached.exists():
+            matches = list(_CACHE_DIR.glob(f"{video_id}.*"))
+            if matches:
+                cached = matches[0]
+        if cached.exists():
+            shutil.copy2(cached, dest)
+            index[video_id] = {"title": title}
+            _save_cache_index(index)
+            return dest, title
 
     path = dest_dir / f"{stem}.mp3"
     if not path.exists():

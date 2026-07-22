@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { Mosaic } from '../api/client'
 
 type Props = {
@@ -7,7 +8,10 @@ type Props = {
 }
 
 export function TimelineStrip({ mosaic, time, onSeek }: Props) {
-  const colorById = Object.fromEntries(mosaic.songs.map((s) => [s.id, s.color]))
+  const colorById = useMemo(
+    () => Object.fromEntries(mosaic.songs.map((s) => [s.id, s.color])),
+    [mosaic.songs],
+  )
   const dur = mosaic.duration_s || 1
 
   return (

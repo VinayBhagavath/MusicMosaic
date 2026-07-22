@@ -4,12 +4,19 @@ import type { Mosaic, MosaicTile } from '../api/client'
 type Props = {
   mosaic: Mosaic
   activeTile: number
+  playing?: boolean
   onSelect: (tile: MosaicTile) => void
   /** When true, tiles cascade in on mount (post-reconstruction reveal). */
   animateReveal?: boolean
 }
 
-export function MosaicGrid({ mosaic, activeTile, onSelect, animateReveal = true }: Props) {
+export function MosaicGrid({
+  mosaic,
+  activeTile,
+  playing = false,
+  onSelect,
+  animateReveal = true,
+}: Props) {
   const colorById = useMemo(
     () => Object.fromEntries(mosaic.songs.map((s) => [s.id, s.color])),
     [mosaic.songs],
@@ -31,12 +38,13 @@ export function MosaicGrid({ mosaic, activeTile, onSelect, animateReveal = true 
   }, [animateReveal, mosaic.tiles.length])
 
   useEffect(() => {
+    // Instant scroll while playing — smooth fights the playhead
     cellRefs.current[activeTile]?.scrollIntoView({
       block: 'nearest',
       inline: 'nearest',
-      behavior: 'smooth',
+      behavior: playing ? 'auto' : 'smooth',
     })
-  }, [activeTile])
+  }, [activeTile, playing])
 
   return (
     <div

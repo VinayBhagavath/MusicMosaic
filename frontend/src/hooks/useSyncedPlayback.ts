@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-/** Sync tile index to audio currentTime via rAF. Dual-source A/B safe. */
+/** Sync tile index to audio currentTime. Throttled React updates to avoid 60Hz re-renders. */
 export function useSyncedPlayback(hopS: number, durationS: number) {
   const mosaicRef = useRef<HTMLAudioElement | null>(null)
   const targetRef = useRef<HTMLAudioElement | null>(null)
@@ -9,19 +9,31 @@ export function useSyncedPlayback(hopS: number, durationS: number) {
   const [time, setTime] = useState(0)
   const [activeTile, setActiveTile] = useState(0)
   const pending = useRef<{ t: number; play: boolean } | null>(null)
+  const timeRef = useRef(0)
+  const tileRef = useRef(0)
+  const lastUi = useRef(0)
 
   const active = () => (useTarget ? targetRef.current : mosaicRef.current)
 
+  const tileAt = (t: number) =>
+    Math.min(Math.floor(t / hopS), Math.max(0, Math.floor(durationS / hopS) - 1))
+
   useEffect(() => {
     let raf = 0
-    const tick = () => {
+    const tick = (now: number) => {
       const a = active()
       if (a && !a.paused) {
         const t = a.currentTime
-        setTime(t)
-        setActiveTile(
-          Math.min(Math.floor(t / hopS), Math.max(0, Math.floor(durationS / hopS) - 1)),
-        )
+        timeRef.current = t
+        const tile = tileAt(t)
+        const tileChanged = tile !== tileRef.current
+        tileRef.current = tile
+        // ~12 Hz UI updates; immediate when tile changes for grid highlight
+        if (tileChanged || now - lastUi.current > 80) {
+          lastUi.current = now
+          setTime(t)
+          if (tileChanged) setActiveTile(tile)
+        }
       }
       raf = requestAnimationFrame(tick)
     }
@@ -40,8 +52,10 @@ export function useSyncedPlayback(hopS: number, durationS: number) {
       } catch {
         /* ignore seek before ready */
       }
+      timeRef.current = p.t
+      tileRef.current = tileAt(p.t)
       setTime(p.t)
-      setActiveTile(Math.floor(p.t / hopS))
+      setActiveTile(tileRef.current)
       if (p.play) {
         a.play()
           .then(() => setPlaying(true))
@@ -67,13 +81,15 @@ export function useSyncedPlayback(hopS: number, durationS: number) {
     const a = active()
     if (a) {
       a.currentTime = t
+      timeRef.current = t
+      tileRef.current = tileAt(t)
       setTime(t)
-      setActiveTile(Math.floor(t / hopS))
+      setActiveTile(tileRef.current)
     }
   }
   const toggleSource = () => {
     const a = active()
-    pending.current = { t: a?.currentTime ?? time, play: !!(a && !a.paused) }
+    pending.current = { t: a?.currentTime ?? timeRef.current, play: !!(a && !a.paused) }
     mosaicRef.current?.pause()
     targetRef.current?.pause()
     setUseTarget((v) => !v)

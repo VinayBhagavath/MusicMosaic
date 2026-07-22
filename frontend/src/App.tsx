@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   audioUrl,
   createJob,
@@ -31,8 +31,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [mosaic, setMosaic] = useState<Mosaic | null>(null)
   const [selected, setSelected] = useState<MosaicTile | null>(null)
+  const inflight = useRef(false)
 
-  const hop = mosaic?.hop_s ?? 0.25
+  const hop = mosaic?.hop_s ?? 0.22
   const dur = mosaic?.duration_s ?? 0
   const playback = useSyncedPlayback(hop, dur)
 
@@ -56,22 +57,26 @@ export default function App() {
 
   useEffect(() => {
     if (!jobId || phase !== 'running') return
-    let ticks = 0
+    let cancelled = false
+    const started = Date.now()
+    const MAX_WAIT_MS = 45 * 60 * 1000 // 45 min — long tracks + CLAP warm-up
     const id = setInterval(async () => {
-      ticks += 1
-      if (ticks > 900) {
-        // ~6 min
+      if (inflight.current || cancelled) return
+      if (Date.now() - started > MAX_WAIT_MS) {
         setPhase('error')
         setError('Timed out waiting for reconstruction')
         return
       }
+      inflight.current = true
       try {
         const st = await getJob(jobId)
+        if (cancelled) return
         setPct(st.pct)
         setMessage(st.message)
         setStage(st.stage)
         if (st.stage === 'done') {
           const m = await getMosaic(jobId)
+          if (cancelled) return
           setMosaic(m)
           setPhase('done')
         } else if (st.stage === 'error') {
@@ -79,11 +84,17 @@ export default function App() {
           setError(st.error || st.message)
         }
       } catch (e) {
+        if (cancelled) return
         setPhase('error')
         setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        inflight.current = false
       }
     }, 400)
-    return () => clearInterval(id)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [jobId, phase])
 
   return (
@@ -118,6 +129,7 @@ export default function App() {
           <MosaicGrid
             mosaic={mosaic}
             activeTile={playback.activeTile}
+            playing={playback.playing}
             onSelect={setSelected}
             animateReveal
           />

@@ -48,16 +48,22 @@ def _set(job_id: str, **kwargs) -> None:
 
 async def _save_upload(upload: UploadFile, dest: Path) -> str:
     size = 0
-    chunks: list[bytes] = []
-    while True:
-        chunk = await upload.read(1024 * 1024)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
-        chunks.append(chunk)
-    dest.write_bytes(b"".join(chunks))
+    try:
+        with dest.open("wb") as f:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413,
+                        f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
     return upload.filename or dest.name
 
 
@@ -113,6 +119,19 @@ def _run(
             lambda_self=params.lambda_self,
             lambda_concat=params.lambda_concat,
             lambda_join=params.lambda_join,
+            min_run_tiles=params.min_run_tiles,
+            per_song_k=params.per_song_k,
+            lambda_balance=params.lambda_balance,
+            max_share=params.max_share,
+            balance_iters=params.balance_iters,
+            n_layers=params.n_layers,
+            layer_primary_weight=params.layer_primary_weight,
+            fidelity_first=params.fidelity_first,
+            harmonic_match=params.harmonic_match,
+            harmonic_strength=params.harmonic_strength,
+            onset_sync_xf=params.onset_sync_xf,
+            rerank_spectral=params.rerank_spectral,
+            use_stems=params.use_stems,
         )
         result = run_job(
             resolved_target,
@@ -149,15 +168,28 @@ async def create_job(
     source_2_url: str | None = Form(None),
     source_3_url: str | None = Form(None),
     source_4_url: str | None = Form(None),
-    window_s: float = Form(1.0),
-    hop_s: float = Form(0.5),
-    top_k: int = Form(12),
-    lambda_switch: float = Form(1.15),
-    lambda_jump: float = Form(0.55),
+    window_s: float = Form(0.45),
+    hop_s: float = Form(0.22),
+    top_k: int = Form(20),
+    lambda_switch: float = Form(0.08),
+    lambda_jump: float = Form(0.15),
     jump_norm_s: float = Form(2.0),
-    lambda_self: float = Form(0.02),
-    lambda_concat: float = Form(0.25),
-    lambda_join: float = Form(0.55),
+    lambda_self: float = Form(0.03),
+    lambda_concat: float = Form(0.55),
+    lambda_join: float = Form(0.70),
+    per_song_k: int = Form(4),
+    lambda_balance: float = Form(0.0),
+    max_share: float = Form(1.0),
+    balance_iters: int = Form(1),
+    min_run_tiles: int = Form(1),
+    n_layers: int = Form(1),
+    layer_primary_weight: float = Form(0.62),
+    fidelity_first: bool = Form(True),
+    harmonic_match: bool = Form(True),
+    harmonic_strength: float = Form(0.55),
+    onset_sync_xf: bool = Form(True),
+    rerank_spectral: bool = Form(True),
+    use_stems: bool = Form(False),
 ) -> JobCreateResponse:
     try:
         params = JobParams(
@@ -170,6 +202,19 @@ async def create_job(
             lambda_self=lambda_self,
             lambda_concat=lambda_concat,
             lambda_join=lambda_join,
+            per_song_k=per_song_k,
+            lambda_balance=lambda_balance,
+            max_share=max_share,
+            balance_iters=balance_iters,
+            min_run_tiles=min_run_tiles,
+            n_layers=n_layers,
+            layer_primary_weight=layer_primary_weight,
+            fidelity_first=fidelity_first,
+            harmonic_match=harmonic_match,
+            harmonic_strength=harmonic_strength,
+            onset_sync_xf=onset_sync_xf,
+            rerank_spectral=rerank_spectral,
+            use_stems=use_stems,
         )
     except ValidationError as e:
         raise HTTPException(422, e.errors()) from e
@@ -243,14 +288,41 @@ def youtube_search(q: str, limit: int = 10) -> YouTubeSearchResponse:
     )
 
 
+def _hydrate_job_from_disk(job_id: str) -> JobStatus | None:
+    """Recover completed jobs after process restart from mosaic.json on disk."""
+    import json
+
+    mosaic_path = DATA_DIR / job_id / "mosaic.json"
+    if not mosaic_path.exists():
+        return None
+    try:
+        mosaic = json.loads(mosaic_path.read_text())
+    except Exception:
+        return None
+    status = JobStatus(
+        job_id=job_id,
+        stage="done",
+        pct=100,
+        message="Complete",
+        stats=mosaic.get("stats"),
+        elapsed_s=None,
+    )
+    with _lock:
+        _jobs[job_id] = status
+    return status
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatus)
 def get_job(job_id: str) -> JobStatus:
     _require_job_id(job_id)
     with _lock:
         status = _jobs.get(job_id)
-    if not status:
-        raise HTTPException(404, "Job not found")
-    return status
+    if status:
+        return status
+    hydrated = _hydrate_job_from_disk(job_id)
+    if hydrated:
+        return hydrated
+    raise HTTPException(404, "Job not found")
 
 
 @router.get("/jobs/{job_id}/mosaic")

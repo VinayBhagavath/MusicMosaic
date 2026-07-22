@@ -24,6 +24,7 @@ export function TileDetail({ tile, songs, windowS, hopS, onSeekTo, onClose }: Pr
     )
   }
   const song = songs.find((s) => s.id === tile.song_id)
+  const layers = tile.layers?.length ? tile.layers : null
   return (
     <aside className="tile-detail">
       <button type="button" className="linkish" onClick={onClose}>
@@ -32,7 +33,7 @@ export function TileDetail({ tile, songs, windowS, hopS, onSeekTo, onClose }: Pr
       <h3>Tile {tile.i}</h3>
       <p>
         <span className="swatch" style={{ background: song?.color }} />
-        Source <strong>{tile.song_id}</strong> ({song?.name})
+        Primary <strong>{tile.song_id}</strong> ({song?.name})
       </p>
       <dl>
         <div>
@@ -47,7 +48,37 @@ export function TileDetail({ tile, songs, windowS, hopS, onSeekTo, onClose }: Pr
           <dt>Similarity</dt>
           <dd>{tile.similarity.toFixed(3)}</dd>
         </div>
+        <div>
+          <dt>Pitch shift</dt>
+          <dd>{(tile.key_shift ?? 0).toFixed(2)} st</dd>
+        </div>
+        {tile.target_duration_s != null && (
+          <div>
+            <dt>Event length</dt>
+            <dd>{tile.target_duration_s.toFixed(2)}s</dd>
+          </div>
+        )}
       </dl>
+      {layers && layers.length > 1 && (
+        <div className="layers">
+          <h4>Layers</h4>
+          <ul>
+            {layers.map((L, idx) => {
+              const ls = songs.find((s) => s.id === L.song_id)
+              return (
+                <li key={`${L.song_id}-${idx}`}>
+                  <span className="swatch" style={{ background: ls?.color }} />
+                  <strong>{L.song_id}</strong>
+                  <span>
+                    {(L.weight * 100).toFixed(0)}% · {L.similarity.toFixed(2)} ·{' '}
+                    {L.role ?? 'full'} · {(L.key_shift ?? 0).toFixed(2)} st
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
       <button type="button" className="cta small" onClick={() => onSeekTo(tile.target_start_s)}>
         Jump to tile
       </button>

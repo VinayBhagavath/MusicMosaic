@@ -11,19 +11,26 @@ dependencies = [
     "scipy>=1.14.0",
     "librosa>=0.10.2",
     "soundfile>=0.12.1",
-    "faiss-cpu>=1.8.0",
-    "pyloudnorm>=0.1.1",
     "pydantic>=2.9.0",
     "yt-dlp>=2024.8.0",
-    "torch>=2.2.0",
-    "torchaudio>=2.2.0",
-    "transformers>=4.40.0",
+    "pyrubberband>=0.3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
     "httpx>=0.27.0",
+]
+clap = [
+    "torch>=2.2.0",
+    "torchaudio>=2.2.0",
+    "transformers>=4.40.0",
+]
+stems = [
+    "demucs-mlx>=1.4.0",
+    "demucs>=4.0.0",
+    "torch>=2.2.0",
+    "torchaudio>=2.2.0",
 ]
 
 [project.scripts]

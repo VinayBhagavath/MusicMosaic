@@ -13,13 +13,21 @@ type Props = {
 
 type SlotKey = 'target' | 0 | 1 | 2 | 3 | 4
 
-const EMPTY: AudioInput[] = [
-  { file: null, url: '' },
-  { file: null, url: '' },
-  { file: null, url: '' },
-  { file: null, url: '' },
-  { file: null, url: '' },
+/** Demo preset so Compose is one click away during local testing. */
+const DEMO_TARGET_URL =
+  'https://www.youtube.com/watch?v=4y33h81phKU' // Interstellar piano (Patrik Pietschmann)
+const DEMO_SOURCE_URLS = [
+  'https://www.youtube.com/watch?v=9gOILesi2wI', // violin — Wellerman x He's a Pirate
+  'https://www.youtube.com/watch?v=6jGPypPNEg4', // lofi — jinsang affection
+  'https://www.youtube.com/watch?v=7RWbq-lbBlk', // Cafuné — Tek It
+  'https://www.youtube.com/watch?v=_qJjM7ZoSuk', // Neon (John Mayer) — Sungha Jung guitar
+  'https://www.youtube.com/watch?v=8GW6sLrK40k', // HOME — Resonance
 ]
+
+const DEMO_SOURCES: AudioInput[] = DEMO_SOURCE_URLS.map((url) => ({
+  file: null,
+  url,
+}))
 const PIGMENTS = ['#C45C26', '#C9A227', '#2F6F5E', '#3D5A80', '#A24B6F']
 
 function filled(a: AudioInput) {
@@ -36,14 +44,22 @@ function fmtDur(s: number | null | undefined) {
 }
 
 export function UploadPanel({ onSubmit, busy }: Props) {
-  const [target, setTarget] = useState<AudioInput>({ file: null, url: '' })
-  const [sources, setSources] = useState<AudioInput[]>(EMPTY)
+  const [target, setTarget] = useState<AudioInput>({
+    file: null,
+    url: DEMO_TARGET_URL,
+  })
+  const [sources, setSources] = useState<AudioInput[]>(DEMO_SOURCES)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [params, setParams] = useState<JobParams>({
-    window_s: 1.0,
-    hop_s: 0.5,
-    lambda_switch: 1.15,
+    window_s: 0.45,
+    hop_s: 0.22,
+    lambda_switch: 0.08,
+    lambda_balance: 0,
+    max_share: 1,
+    n_layers: 1,
+    fidelity_first: true,
+    use_stems: false,
   })
 
   const [searchQ, setSearchQ] = useState('piano')
@@ -226,7 +242,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
 
       <p className="hint">
         Search returns songs between 5 seconds and 5 minutes (e.g. “piano” → “piano songs”).
-        Matching uses key-invariant chroma + pretrained CLAP when available.
+        Fidelity matching uses temporal chroma, register, timbre, dynamics, and exact reranking.
       </p>
 
       <div className="actions">
@@ -252,6 +268,22 @@ export function UploadPanel({ onSubmit, busy }: Props) {
 
       {showAdvanced && (
         <div className="advanced">
+          <label style={{ gridColumn: '1 / -1' }}>
+            <input
+              type="checkbox"
+              checked={params.fidelity_first}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  fidelity_first: e.target.checked,
+                  lambda_balance: e.target.checked ? 0 : 0.25,
+                  max_share: e.target.checked ? 1 : 0.45,
+                  n_layers: e.target.checked ? 1 : 2,
+                }))
+              }
+            />{' '}
+            Fidelity first (best acoustic match may favor one source)
+          </label>
           <label>
             Window (s)
             <input
@@ -293,6 +325,67 @@ export function UploadPanel({ onSubmit, busy }: Props) {
                 }))
               }
             />
+          </label>
+          <label>
+            Variety pressure
+            <input
+              type="number"
+              step={0.05}
+              min={0}
+              max={3}
+              value={params.lambda_balance}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  lambda_balance: Number(e.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            Max song share
+            <input
+              type="number"
+              step={0.02}
+              min={0.15}
+              max={1}
+              value={params.max_share}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  max_share: Number(e.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            Seam layers (2 = stack bass/drums like MIDI tracks)
+            <input
+              type="number"
+              step={1}
+              min={1}
+              max={5}
+              value={params.n_layers}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  n_layers: Number(e.target.value),
+                }))
+              }
+            />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <input
+              type="checkbox"
+              checked={Boolean(params.use_stems)}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  use_stems: e.target.checked,
+                }))
+              }
+            />{' '}
+            Stem separation (slower; better role layers on Metal/MLX)
           </label>
           {params.hop_s > params.window_s && (
             <p className="error" style={{ gridColumn: '1 / -1' }}>

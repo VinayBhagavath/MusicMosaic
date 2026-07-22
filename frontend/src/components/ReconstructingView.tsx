@@ -24,6 +24,14 @@ export function ReconstructingView({ pct, message, stage }: Props) {
     return idx
   }, [total])
 
+  const orderRank = useMemo(() => {
+    const rank = new Array<number>(total)
+    order.forEach((cell, rankIdx) => {
+      rank[cell] = rankIdx
+    })
+    return rank
+  }, [order, total])
+
   const fillCount = Math.floor((Math.min(100, Math.max(0, pct)) / 100) * total)
   const filled = useMemo(() => new Set(order.slice(0, fillCount)), [order, fillCount])
 
@@ -96,7 +104,7 @@ export function ReconstructingView({ pct, message, stage }: Props) {
         >
           {Array.from({ length: total }, (_, i) => {
             const isFilled = filled.has(i)
-            const color = PIGMENTS[(order.indexOf(i) + i) % PIGMENTS.length]
+            const color = PIGMENTS[((orderRank[i] ?? 0) + i) % PIGMENTS.length]
             return (
               <div
                 key={i}

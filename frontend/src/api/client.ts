@@ -10,12 +10,24 @@ export type JobStatus = {
 
 export type MosaicSong = { id: string; name: string; color: string }
 
-export type MosaicTile = {
-  i: number
-  target_start_s: number
+export type MosaicLayer = {
   song_id: string
   source_start_s: number
   similarity: number
+  weight: number
+  key_shift?: number
+  role?: string
+}
+
+export type MosaicTile = {
+  i: number
+  target_start_s: number
+  target_duration_s?: number
+  song_id: string
+  source_start_s: number
+  similarity: number
+  key_shift?: number
+  layers?: MosaicLayer[]
 }
 
 export type Mosaic = {
@@ -31,6 +43,18 @@ export type Mosaic = {
     transitions_viterbi: number
     transitions_greedy: number
     num_tiles: number
+    n_layers?: number
+    max_share?: number
+    fidelity_first?: boolean
+    embedding_backend?: string
+    use_stems?: boolean
+    stage_timings_s?: Record<string, number>
+    quality?: {
+      log_mel_distance: number
+      chroma_similarity: number
+      onset_correlation: number
+      boundary_discontinuity: number
+    }
   }
 }
 
@@ -38,6 +62,11 @@ export type JobParams = {
   window_s: number
   hop_s: number
   lambda_switch: number
+  lambda_balance: number
+  max_share: number
+  n_layers: number
+  fidelity_first: boolean
+  use_stems?: boolean
 }
 
 export type AudioInput = {
@@ -83,6 +112,20 @@ export async function createJob(
   fd.append('window_s', String(params.window_s))
   fd.append('hop_s', String(params.hop_s))
   fd.append('lambda_switch', String(params.lambda_switch))
+  fd.append('lambda_balance', String(params.lambda_balance))
+  fd.append('max_share', String(params.max_share))
+  fd.append('n_layers', String(params.n_layers))
+  fd.append('layer_primary_weight', params.n_layers > 1 ? '0.62' : '1.0')
+  fd.append('fidelity_first', String(params.fidelity_first))
+  fd.append('use_stems', String(Boolean(params.use_stems)))
+  // Fidelity defaults: exact global beam, short onset units, polyphonic fill.
+  fd.append('min_run_tiles', '1')
+  fd.append('lambda_concat', '0.55')
+  fd.append('lambda_join', '0.7')
+  fd.append('harmonic_match', 'true')
+  fd.append('harmonic_strength', '0.55')
+  fd.append('rerank_spectral', 'true')
+  fd.append('onset_sync_xf', 'true')
   const res = await fetch(`${BASE}/api/jobs`, { method: 'POST', body: fd })
   if (!res.ok) {
     const text = await res.text()
