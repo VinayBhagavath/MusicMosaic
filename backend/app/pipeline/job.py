@@ -14,14 +14,11 @@ from app.pipeline.audio_io import load_and_normalize, write_wav
 from app.pipeline.features import HandcraftedExtractor
 from app.pipeline.index import build_source_index
 from app.pipeline.match import MatchParams, match_sequence
+from app.pipeline.palette import SONG_COLORS, SONG_IDS
 from app.pipeline.reconstruct import reconstruct_ola
 from app.pipeline.segment import segment_audio
 
 ProgressCb = Callable[[str, float, str], None]  # stage, pct 0-100, message
-
-SONG_COLORS = ["#E85D4C", "#F0A202", "#3DDC97", "#4C6EF5", "#E599F7"]
-SONG_IDS = ["A", "B", "C", "D", "E"]
-
 
 @dataclass
 class JobConfig:

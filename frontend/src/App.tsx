@@ -11,6 +11,7 @@ import {
 } from './api/client'
 import { MosaicGrid } from './components/MosaicGrid'
 import { PlaybackBar } from './components/PlaybackBar'
+import { ReconstructingView } from './components/ReconstructingView'
 import { StatsPanel } from './components/StatsPanel'
 import { TileDetail } from './components/TileDetail'
 import { TimelineStrip } from './components/TimelineStrip'
@@ -25,6 +26,7 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [pct, setPct] = useState(0)
   const [message, setMessage] = useState('')
+  const [stage, setStage] = useState('queued')
   const [error, setError] = useState<string | null>(null)
   const [mosaic, setMosaic] = useState<Mosaic | null>(null)
   const [selected, setSelected] = useState<MosaicTile | null>(null)
@@ -37,7 +39,8 @@ export default function App() {
   const onSubmit = useCallback(async (target: File, sources: File[], params: JobParams) => {
     setPhase('running')
     setError(null)
-    setPct(0)
+    setPct(2)
+    setStage('queued')
     setMessage('Uploading…')
     try {
       const id = await createJob(target, sources, params)
@@ -55,6 +58,7 @@ export default function App() {
         const st = await getJob(jobId)
         setPct(st.pct)
         setMessage(st.message)
+        setStage(st.stage)
         if (st.stage === 'done') {
           const m = await getMosaic(jobId)
           setMosaic(m)
@@ -67,28 +71,20 @@ export default function App() {
         setPhase('error')
         setError(e instanceof Error ? e.message : String(e))
       }
-    }, 500)
+    }, 400)
     return () => clearInterval(id)
   }, [jobId, phase])
 
   return (
     <div className="app">
-      <div className="grain" aria-hidden />
       {phase === 'upload' && <UploadPanel onSubmit={onSubmit} busy={false} />}
 
       {phase === 'running' && (
-        <section className="progress-panel">
-          <h1 className="brand sm">Music Mosaic</h1>
-          <p className="lede">{message}</p>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="mono muted">{pct.toFixed(0)}%</p>
-        </section>
+        <ReconstructingView pct={pct} message={message} stage={stage} />
       )}
 
       {phase === 'error' && (
-        <section className="progress-panel">
+        <section className="error-panel">
           <h1 className="brand sm">Music Mosaic</h1>
           <p className="error">{error}</p>
           <button type="button" className="cta" onClick={() => setPhase('upload')}>
@@ -110,6 +106,7 @@ export default function App() {
             mosaic={mosaic}
             activeTile={playback.activeTile}
             onSelect={setSelected}
+            animateReveal
           />
           <TimelineStrip mosaic={mosaic} time={playback.time} onSeek={playback.seek} />
           <PlaybackBar

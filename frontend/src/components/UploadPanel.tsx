@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { JobParams } from '../api/client'
 
 type Props = {
@@ -7,6 +7,7 @@ type Props = {
 }
 
 const EMPTY = [null, null, null, null, null] as (File | null)[]
+const PIGMENTS = ['#C45C26', '#C9A227', '#2F6F5E', '#3D5A80', '#A24B6F']
 
 export function UploadPanel({ onSubmit, busy }: Props) {
   const [target, setTarget] = useState<File | null>(null)
@@ -17,7 +18,6 @@ export function UploadPanel({ onSubmit, busy }: Props) {
     hop_s: 0.25,
     lambda_switch: 0.35,
   })
-  const targetRef = useRef<HTMLInputElement>(null)
 
   const ready = useMemo(
     () => !!target && sources.every(Boolean),
@@ -34,28 +34,44 @@ export function UploadPanel({ onSubmit, busy }: Props) {
         <p className="eyebrow">Acoustic collage</p>
         <h1 className="brand">Music Mosaic</h1>
         <p className="lede">
-          Rebuild one song using only fragments from five others.
+          Rebuild one song as a quilt of fragments — using only five other tracks.
         </p>
+        <div className="hero-mosaic" aria-hidden>
+          {Array.from({ length: 36 }, (_, i) => (
+            <span
+              key={i}
+              style={{
+                background: PIGMENTS[i % PIGMENTS.length],
+                opacity: 0.35 + ((i * 17) % 50) / 100,
+                animationDelay: `${(i % 12) * 40}ms`,
+              }}
+            />
+          ))}
+        </div>
       </div>
 
       <div className="drop-grid">
-        <label className="drop target-drop">
-          <span className="drop-label">Target</span>
-          <span className="drop-file">{target?.name ?? 'Drop MP3'}</span>
+        <label className={`drop target-drop${target ? ' has-file' : ''}`}>
+          <span className="drop-label">Target song · MP3</span>
+          <span className="drop-file">{target?.name ?? 'Drop or choose the song to reconstruct'}</span>
           <input
-            ref={targetRef}
             type="file"
-            accept="audio/*,.mp3,.wav,.flac,.m4a"
+            accept=".mp3,audio/mpeg"
             onChange={(e) => setTarget(e.target.files?.[0] ?? null)}
           />
         </label>
         {sources.map((s, i) => (
-          <label key={i} className="drop">
+          <label key={i} className={`drop${s ? ' has-file' : ''}`}>
+            <span
+              className="drop-swatch"
+              style={{ background: PIGMENTS[i] }}
+              aria-hidden
+            />
             <span className="drop-label">Source {String.fromCharCode(65 + i)}</span>
-            <span className="drop-file">{s?.name ?? 'Drop MP3'}</span>
+            <span className="drop-file">{s?.name ?? 'MP3'}</span>
             <input
               type="file"
-              accept="audio/*,.mp3,.wav,.flac,.m4a"
+              accept=".mp3,audio/mpeg"
               onChange={(e) => setSource(i, e.target.files?.[0] ?? null)}
             />
           </label>
@@ -66,11 +82,9 @@ export function UploadPanel({ onSubmit, busy }: Props) {
         <button
           className="cta"
           disabled={!ready || busy}
-          onClick={() =>
-            ready && onSubmit(target!, sources as File[], params)
-          }
+          onClick={() => ready && onSubmit(target!, sources as File[], params)}
         >
-          {busy ? 'Building…' : 'Build mosaic'}
+          Compose mosaic
         </button>
         <button
           type="button"

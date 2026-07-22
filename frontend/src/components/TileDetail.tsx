@@ -15,7 +15,13 @@ function fmt(s: number) {
 }
 
 export function TileDetail({ tile, songs, hopS, onSeekTo, onClose }: Props) {
-  if (!tile) return null
+  if (!tile) {
+    return (
+      <aside className="tile-detail">
+        <p className="hint">Select a tile to inspect its source fragment.</p>
+      </aside>
+    )
+  }
   const song = songs.find((s) => s.id === tile.song_id)
   return (
     <aside className="tile-detail">
@@ -44,7 +50,7 @@ export function TileDetail({ tile, songs, hopS, onSeekTo, onClose }: Props) {
       <button type="button" className="cta small" onClick={() => onSeekTo(tile.target_start_s)}>
         Jump to tile
       </button>
-      <p className="hint">Window ≈ {hopS * 2}s with {hopS}s hop</p>
+      <p className="hint">Window ≈ {(hopS * 2).toFixed(2)}s · hop {hopS}s</p>
     </aside>
   )
 }
