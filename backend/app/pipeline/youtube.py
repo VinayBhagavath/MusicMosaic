@@ -77,9 +77,69 @@ def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path
 
     path = dest_dir / f"{stem}.mp3"
     if not path.exists():
-        # Rare: already-mp3 without postprocess rename
         matches = list(dest_dir.glob(f"{stem}.*"))
         if not matches:
             raise RuntimeError("Download finished but audio file missing (is ffmpeg installed?)")
         path = matches[0]
     return path, title
+
+
+def search_youtube(
+    query: str,
+    *,
+    limit: int = 12,
+    instrumental: bool = True,
+) -> list[dict]:
+    """Search YouTube via yt-dlp (no API key). Prefers instrumental results when enabled."""
+    try:
+        import yt_dlp
+    except ImportError as e:
+        raise RuntimeError("yt-dlp is not installed") from e
+
+    q = query.strip()
+    if not q:
+        raise ValueError("Empty search query")
+    if instrumental and "instrumental" not in q.lower():
+        q = f"{q} instrumental"
+
+    limit = max(1, min(int(limit), 20))
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "socket_timeout": 30,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
+
+    results: list[dict] = []
+    for entry in (info or {}).get("entries") or []:
+        if not entry:
+            continue
+        vid = entry.get("id") or ""
+        title = entry.get("title") or "Untitled"
+        url = entry.get("url") or entry.get("webpage_url")
+        if not url and vid:
+            url = f"https://www.youtube.com/watch?v={vid}"
+        if not url:
+            continue
+        dur = entry.get("duration")
+        # Prefer clips in our supported duration band when known
+        if dur is not None:
+            try:
+                d = float(dur)
+                if d < MIN_DURATION_S or d > MAX_DURATION_S:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        results.append(
+            {
+                "id": str(vid or url),
+                "title": str(title),
+                "url": str(url),
+                "duration_s": float(dur) if dur is not None else None,
+                "channel": entry.get("uploader") or entry.get("channel"),
+            }
+        )
+    return results

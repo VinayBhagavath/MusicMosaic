@@ -1,10 +1,17 @@
-import { useMemo, useState } from 'react'
-import type { AudioInput, JobParams } from '../api/client'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  searchYouTube,
+  type AudioInput,
+  type JobParams,
+  type YouTubeHit,
+} from '../api/client'
 
 type Props = {
   onSubmit: (target: AudioInput, sources: AudioInput[], params: JobParams) => void
   busy: boolean
 }
+
+type SlotKey = 'target' | 0 | 1 | 2 | 3 | 4
 
 const EMPTY: AudioInput[] = [
   { file: null, url: '' },
@@ -19,16 +26,31 @@ function filled(a: AudioInput) {
   return !!(a.file || a.url.trim())
 }
 
+function fmtDur(s: number | null | undefined) {
+  if (s == null || !Number.isFinite(s)) return ''
+  const m = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+    .toString()
+    .padStart(2, '0')
+  return `${m}:${sec}`
+}
+
 export function UploadPanel({ onSubmit, busy }: Props) {
   const [target, setTarget] = useState<AudioInput>({ file: null, url: '' })
   const [sources, setSources] = useState<AudioInput[]>(EMPTY)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [params, setParams] = useState<JobParams>({
-    window_s: 0.5,
-    hop_s: 0.25,
-    lambda_switch: 0.35,
+    window_s: 1.0,
+    hop_s: 0.5,
+    lambda_switch: 0.85,
   })
+
+  const [searchQ, setSearchQ] = useState('piano')
+  const [searching, setSearching] = useState(false)
+  const [hits, setHits] = useState<YouTubeHit[]>([])
+  const [searchErr, setSearchErr] = useState<string | null>(null)
+  const [assignTo, setAssignTo] = useState<SlotKey>('target')
 
   const ready = useMemo(
     () => filled(target) && sources.every(filled) && params.hop_s <= params.window_s,
@@ -40,7 +62,6 @@ export function UploadPanel({ onSubmit, busy }: Props) {
       prev.map((x, j) => {
         if (j !== i) return x
         const next = { ...x, ...patch }
-        // File and URL are mutually exclusive
         if (patch.file) next.url = ''
         if (patch.url !== undefined && patch.url !== '') next.file = null
         return next
@@ -48,13 +69,40 @@ export function UploadPanel({ onSubmit, busy }: Props) {
     )
   }
 
+  const assignUrl = (url: string, slot: SlotKey) => {
+    if (slot === 'target') setTarget({ file: null, url })
+    else setSource(slot, { file: null, url })
+  }
+
+  const runSearch = async () => {
+    setSearching(true)
+    setSearchErr(null)
+    try {
+      const res = await searchYouTube(searchQ, true)
+      setHits(res)
+      if (!res.length) setSearchErr('No instrumental results in the 5s–8min range.')
+    } catch (e) {
+      setSearchErr(e instanceof Error ? e.message : String(e))
+      setHits([])
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  useEffect(() => {
+    // gentle default search on first paint so the picker isn't empty
+    void runSearch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <section className="upload">
       <div className="hero-copy">
-        <p className="eyebrow">Acoustic collage</p>
+        <p className="eyebrow">Instrumental collage</p>
         <h1 className="brand">Music Mosaic</h1>
         <p className="lede">
-          Rebuild one song as a quilt of fragments — upload MP3s or paste YouTube links.
+          Rebuild an instrumental from five others — search YouTube or drop MP3s.
+          Tuned for harmony &amp; continuity (vocals later).
         </p>
         <div className="hero-mosaic" aria-hidden>
           {Array.from({ length: 36 }, (_, i) => (
@@ -70,13 +118,67 @@ export function UploadPanel({ onSubmit, busy }: Props) {
         </div>
       </div>
 
+      <div className="yt-search">
+        <div className="yt-search-row">
+          <input
+            className="yt-query"
+            value={searchQ}
+            disabled={busy}
+            placeholder='Search instrumentals — e.g. "piano", "lofi guitar"'
+            onChange={(e) => setSearchQ(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void runSearch()}
+          />
+          <button
+            type="button"
+            className="cta small"
+            disabled={busy || searching || searchQ.trim().length < 2}
+            onClick={() => void runSearch()}
+          >
+            {searching ? 'Searching…' : 'Search'}
+          </button>
+          <select
+            className="yt-assign"
+            value={String(assignTo)}
+            disabled={busy}
+            onChange={(e) => {
+              const v = e.target.value
+              setAssignTo(v === 'target' ? 'target' : (Number(v) as 0 | 1 | 2 | 3 | 4))
+            }}
+          >
+            <option value="target">Insert → Target</option>
+            {PIGMENTS.map((_, i) => (
+              <option key={i} value={i}>
+                Insert → Source {String.fromCharCode(65 + i)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {searchErr && <p className="error">{searchErr}</p>}
+        <div className="yt-results">
+          {hits.map((h) => (
+            <button
+              key={h.id}
+              type="button"
+              className="yt-hit"
+              disabled={busy}
+              onClick={() => assignUrl(h.url, assignTo)}
+              title={h.url}
+            >
+              <span className="yt-hit-title">{h.title}</span>
+              <span className="yt-hit-meta mono">
+                {fmtDur(h.duration_s)}
+                {h.channel ? ` · ${h.channel}` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="drop-grid">
         <div className={`drop target-drop${filled(target) ? ' has-file' : ''}`}>
           <span className="drop-label">Target · MP3 or YouTube</span>
           <label className="file-hit">
-            <span className="drop-file">
-              {target.file?.name ?? 'Choose MP3'}
-            </span>
+            <span className="drop-file">{target.file?.name ?? 'Choose MP3'}</span>
             <input
               type="file"
               accept=".mp3,audio/mpeg"
@@ -98,11 +200,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
 
         {sources.map((s, i) => (
           <div key={i} className={`drop${filled(s) ? ' has-file' : ''}`}>
-            <span
-              className="drop-swatch"
-              style={{ background: PIGMENTS[i] }}
-              aria-hidden
-            />
+            <span className="drop-swatch" style={{ background: PIGMENTS[i] }} aria-hidden />
             <span className="drop-label">Source {String.fromCharCode(65 + i)}</span>
             <label className="file-hit">
               <span className="drop-file">{s.file?.name ?? 'MP3'}</span>
@@ -128,7 +226,8 @@ export function UploadPanel({ onSubmit, busy }: Props) {
       </div>
 
       <p className="hint">
-        Tracks must be 5 seconds–8 minutes. YouTube downloads need ffmpeg + network.
+        Best with instrumentals (piano, guitar, ambient). Voice is harder — we match harmony &amp;
+        timbre with key-invariant chroma and long continuous runs.
       </p>
 
       <div className="actions">
@@ -159,7 +258,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
             <input
               type="number"
               step={0.05}
-              min={0.1}
+              min={0.25}
               max={2}
               value={params.window_s}
               onChange={(e) =>
@@ -172,7 +271,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
             <input
               type="number"
               step={0.05}
-              min={0.05}
+              min={0.1}
               max={1}
               value={params.hop_s}
               onChange={(e) =>

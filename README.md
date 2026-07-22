@@ -16,7 +16,9 @@ Each slot accepts an **MP3 upload** or a **YouTube URL** (yt-dlp → mp3; needs 
 
 **Requirements:** Node 20+, Python 3.11+, [uv](https://github.com/astral-sh/uv), ffmpeg.
 
-Tracks must be **5 seconds–8 minutes**.
+Tracks must be **5 seconds–8 minutes**. Optimized for **instrumentals** (piano, guitar, ambient). Search YouTube in-app — results auto-append “instrumental”.
+
+Matching uses **key-invariant chroma** (harmony) + timbre + energy, with strong continuity penalties so the quilt prefers longer musical runs.
 
 ### CLI (no UI)
 

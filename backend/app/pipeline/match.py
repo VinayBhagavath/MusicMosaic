@@ -1,4 +1,4 @@
-"""Nearest-neighbor + Viterbi sequence matching."""
+"""Nearest-neighbor + Viterbi sequence matching with musical continuity."""
 
 from __future__ import annotations
 
@@ -6,24 +6,26 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from app.pipeline.features import EmbPack
 from app.pipeline.index import SourceIndex, SourceMeta
 
 
 @dataclass(slots=True)
 class MatchParams:
-    top_k: int = 8
-    lambda_switch: float = 0.35
-    lambda_jump: float = 0.25
+    top_k: int = 12
+    lambda_switch: float = 0.85  # prefer long runs from one song
+    lambda_jump: float = 0.45  # prefer nearby timestamps in same song
     jump_norm_s: float = 2.0
-    lambda_self: float = 0.05
-    hop_s: float = 0.25
+    lambda_self: float = 0.02
+    lambda_concat: float = 0.35  # acoustic jump between consecutive chosen clips
+    hop_s: float = 0.5
 
 
 @dataclass(slots=True)
 class TileMatch:
     target_idx: int
     target_start_s: float
-    source_id: int  # FAISS / meta index
+    source_id: int
     song_id: str
     source_start_s: float
     similarity: float
@@ -43,14 +45,18 @@ def _transition_cost(
     b: SourceMeta,
     b_id: int,
     params: MatchParams,
+    concat_penalty: float,
 ) -> float:
-    cost = 0.0
+    cost = concat_penalty
     if a.song_id != b.song_id:
         cost += params.lambda_switch
     else:
         expected = a.start_s + params.hop_s
         jump = abs(b.start_s - expected)
         cost += params.lambda_jump * min(1.0, jump / params.jump_norm_s)
+        # Reward near-perfect temporal continuation
+        if jump < params.hop_s * 0.6 and params.lambda_jump > 0:
+            cost -= 0.12
     if a_id == b_id:
         cost += params.lambda_self
     return cost
@@ -60,25 +66,32 @@ def _count_transitions(song_ids: list[str]) -> int:
     return sum(1 for i in range(1, len(song_ids)) if song_ids[i] != song_ids[i - 1])
 
 
+def _concat_matrix(pack: EmbPack) -> np.ndarray:
+    """Pairwise acoustic discontinuity in [0, 2] (0 = identical)."""
+    # Blend chroma+timbre for boundary feel
+    c = 0.6 * (pack.chroma @ pack.chroma.T) + 0.4 * (pack.timbre @ pack.timbre.T)
+    return (1.0 - c).astype(np.float32)
+
+
 def match_sequence(
-    target_embeddings: np.ndarray,
+    query: EmbPack,
     target_starts: np.ndarray,
     source: SourceIndex,
     params: MatchParams | None = None,
 ) -> MatchResult:
-    """Top-k FAISS candidates per frame + Viterbi path with transition penalties."""
+    """Top-k musical candidates + Viterbi with switch/jump/concat costs."""
     params = params or MatchParams()
-    n = len(target_embeddings)
+    n = query.chroma.shape[0]
     if n == 0:
         return MatchResult([], 0, 0, 0.0)
 
-    sims, ids = source.search(target_embeddings, k=params.top_k)
+    sims, ids = source.search(query, k=params.top_k)
     k = sims.shape[1]
+    local = 1.0 - sims  # [n,k]
 
-    # Local costs: 1 - cosine similarity
-    local = 1.0 - sims  # [n, k]
+    concat = _concat_matrix(source.pack)  # [n_s, n_s]
+    lam_c = params.lambda_concat
 
-    # DP
     dp = np.full((n, k), np.inf, dtype=np.float64)
     back = np.full((n, k), -1, dtype=np.int32)
     dp[0] = local[0]
@@ -95,13 +108,17 @@ def match_sequence(
                 if a_id < 0 or not np.isfinite(dp[t - 1, i]):
                     continue
                 a_meta = source.meta[a_id]
-                c = dp[t - 1, i] + _transition_cost(a_meta, a_id, b_meta, b_id, params) + local[t, j]
+                cpen = lam_c * float(concat[a_id, b_id])
+                c = (
+                    dp[t - 1, i]
+                    + _transition_cost(a_meta, a_id, b_meta, b_id, params, cpen)
+                    + local[t, j]
+                )
                 if c < best_c:
                     best_c, best_i = c, i
             dp[t, j] = best_c
             back[t, j] = best_i
 
-    # Backtrace
     path_k = np.empty(n, dtype=np.int32)
     path_k[-1] = int(np.argmin(dp[-1]))
     for t in range(n - 2, -1, -1):
@@ -117,7 +134,7 @@ def match_sequence(
         if sid < 0:
             sid = int(ids[t, 0])
         if sid < 0:
-            raise RuntimeError(f"No FAISS match for target frame {t}")
+            raise RuntimeError(f"No match for target frame {t}")
         meta = source.meta[sid]
         tiles.append(
             TileMatch(

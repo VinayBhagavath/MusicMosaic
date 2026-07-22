@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from app.pipeline.job import JobConfig, run_job
-from app.pipeline.youtube import download_youtube_audio, is_youtube_url
-from app.schemas import JobCreateResponse, JobParams, JobStatus
+from app.pipeline.youtube import download_youtube_audio, is_youtube_url, search_youtube
+from app.schemas import JobCreateResponse, JobParams, JobStatus, YouTubeHit, YouTubeSearchResponse
 
 router = APIRouter(prefix="/api")
 
@@ -111,6 +111,7 @@ def _run(
             lambda_jump=params.lambda_jump,
             jump_norm_s=params.jump_norm_s,
             lambda_self=params.lambda_self,
+            lambda_concat=params.lambda_concat,
         )
         result = run_job(
             resolved_target,
@@ -147,13 +148,14 @@ async def create_job(
     source_2_url: str | None = Form(None),
     source_3_url: str | None = Form(None),
     source_4_url: str | None = Form(None),
-    window_s: float = Form(0.5),
-    hop_s: float = Form(0.25),
-    top_k: int = Form(8),
-    lambda_switch: float = Form(0.35),
-    lambda_jump: float = Form(0.25),
+    window_s: float = Form(1.0),
+    hop_s: float = Form(0.5),
+    top_k: int = Form(12),
+    lambda_switch: float = Form(0.85),
+    lambda_jump: float = Form(0.45),
     jump_norm_s: float = Form(2.0),
-    lambda_self: float = Form(0.05),
+    lambda_self: float = Form(0.02),
+    lambda_concat: float = Form(0.35),
 ) -> JobCreateResponse:
     try:
         params = JobParams(
@@ -164,6 +166,7 @@ async def create_job(
             lambda_jump=lambda_jump,
             jump_norm_s=jump_norm_s,
             lambda_self=lambda_self,
+            lambda_concat=lambda_concat,
         )
     except ValidationError as e:
         raise HTTPException(422, e.errors()) from e
@@ -220,6 +223,25 @@ async def create_job(
         _run, job_id, target_path, t_url, source_paths, s_urls, names, params
     )
     return JobCreateResponse(job_id=job_id)
+
+
+@router.get("/youtube/search", response_model=YouTubeSearchResponse)
+def youtube_search(
+    q: str,
+    limit: int = 12,
+    instrumental: bool = True,
+) -> YouTubeSearchResponse:
+    q = (q or "").strip()
+    if len(q) < 2:
+        raise HTTPException(400, "Query too short")
+    try:
+        hits = search_youtube(q, limit=limit, instrumental=instrumental)
+    except Exception as e:
+        raise HTTPException(502, f"YouTube search failed: {e}") from e
+    return YouTubeSearchResponse(
+        query=q,
+        results=[YouTubeHit(**h) for h in hits],
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)

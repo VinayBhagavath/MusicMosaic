@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -11,24 +12,27 @@ from typing import Callable
 import numpy as np
 
 from app.pipeline.audio_io import load_and_normalize, write_wav
-from app.pipeline.features import HandcraftedExtractor
+from app.pipeline.features import EmbPack, MusicalExtractor
 from app.pipeline.index import build_source_index
 from app.pipeline.match import MatchParams, match_sequence
 from app.pipeline.palette import SONG_COLORS, SONG_IDS
 from app.pipeline.reconstruct import reconstruct_ola
 from app.pipeline.segment import segment_audio
 
-ProgressCb = Callable[[str, float, str], None]  # stage, pct 0-100, message
+ProgressCb = Callable[[str, float, str], None]
+
 
 @dataclass
 class JobConfig:
-    window_s: float = 0.5
-    hop_s: float = 0.25
-    top_k: int = 8
-    lambda_switch: float = 0.35
-    lambda_jump: float = 0.25
+    # Longer windows + stronger continuity → more musical instrumentals, fewer tiles (faster)
+    window_s: float = 1.0
+    hop_s: float = 0.5
+    top_k: int = 12
+    lambda_switch: float = 0.85
+    lambda_jump: float = 0.45
     jump_norm_s: float = 2.0
-    lambda_self: float = 0.05
+    lambda_self: float = 0.02
+    lambda_concat: float = 0.35
 
 
 @dataclass
@@ -49,6 +53,14 @@ def _contrib(tiles: list, song_ids: list[str]) -> dict[str, float]:
     return {s: round(100.0 * counts.get(s, 0) / n, 1) for s in song_ids}
 
 
+def _stack_packs(parts: list[EmbPack]) -> EmbPack:
+    return EmbPack(
+        chroma=np.vstack([p.chroma for p in parts]),
+        timbre=np.vstack([p.timbre for p in parts]),
+        energy=np.vstack([p.energy for p in parts]),
+    )
+
+
 def run_job(
     target_path: str | Path,
     source_paths: list[str | Path],
@@ -58,7 +70,6 @@ def run_job(
     source_names: list[str] | None = None,
     on_progress: ProgressCb | None = None,
 ) -> JobResult:
-    """Load → segment → embed → index → match → reconstruct → write artifacts."""
     cfg = config or JobConfig()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -76,53 +87,63 @@ def run_job(
     target_duration_s = len(target_y) / sr
     write_wav(out / "target.wav", target_y, sr)
 
-    sources_y: list[tuple[str, np.ndarray]] = []
     names = source_names or [Path(p).name for p in source_paths]
-    for i, path in enumerate(source_paths):
-        prog("load", 5 + i * 3, f"Loading source {SONG_IDS[i]}")
+
+    def _load_one(i_path: tuple[int, str | Path]) -> tuple[int, np.ndarray]:
+        i, path = i_path
         y, _ = load_and_normalize(path)
-        sources_y.append((SONG_IDS[i], y))
+        return i, y
+
+    prog("load", 6, "Loading sources")
+    sources_y: list[np.ndarray | None] = [None] * 5
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        for i, y in pool.map(_load_one, list(enumerate(source_paths))):
+            sources_y[i] = y
+            prog("load", 8 + i * 2, f"Loaded source {SONG_IDS[i]}")
+    sources_typed = [(SONG_IDS[i], sources_y[i]) for i in range(5)]
+    assert all(y is not None for _, y in sources_typed)
 
     prog("segment", 22, "Segmenting")
     target_segs = segment_audio(
         target_y, sr, "T", window_s=cfg.window_s, hop_s=cfg.hop_s
     )
     source_segs = []
-    for sid, y in sources_y:
+    for sid, y in sources_typed:
         source_segs.extend(
-            segment_audio(y, sr, sid, window_s=cfg.window_s, hop_s=cfg.hop_s)
+            segment_audio(y, sr, sid, window_s=cfg.window_s, hop_s=cfg.hop_s)  # type: ignore[arg-type]
         )
 
-    extractor = HandcraftedExtractor()
+    extractor = MusicalExtractor()
 
-    prog("features", 30, "Embedding target")
-    target_emb = extractor.embed_segments(
+    prog("features", 28, "Embedding target")
+    target_pack = extractor.embed_segments(
         target_y,
         sr,
         target_segs,
-        on_progress=lambda f, m: prog("features", 30 + f * 15, m),
+        on_progress=lambda f, m: prog("features", 28 + f * 12, m),
     )
-    prog("features", 48, "Embedding sources")
-    source_emb_parts: list[np.ndarray] = []
-    for i, (sid, y) in enumerate(sources_y):
+
+    prog("features", 42, "Embedding sources")
+
+    def _embed_source(item: tuple[int, str, np.ndarray]) -> tuple[int, EmbPack]:
+        i, sid, y = item
         segs_i = [s for s in source_segs if s.song_id == sid]
-        part = extractor.embed_segments(
-            y,
-            sr,
-            segs_i,
-            on_progress=lambda f, m, i=i: prog(
-                "features", 48 + (i + f) / 5 * 25, f"source {sid}: {m}"
-            ),
-        )
-        source_emb_parts.append(part)
-    source_emb = (
-        np.vstack(source_emb_parts) if source_emb_parts else np.zeros((0, 54), np.float32)
-    )
+        pack = extractor.embed_segments(y, sr, segs_i)
+        return i, pack
 
-    prog("index", 75, "Building FAISS index")
-    source_index = build_source_index(source_segs, source_emb)
+    packs: list[EmbPack | None] = [None] * 5
+    items = [(i, sid, y) for i, (sid, y) in enumerate(sources_typed)]  # type: ignore[misc]
+    # Parallelize CPU-bound librosa across songs (threads release GIL in numpy/numba paths)
+    with ThreadPoolExecutor(max_workers=min(5, len(items))) as pool:
+        for i, pack in pool.map(_embed_source, items):
+            packs[i] = pack
+            prog("features", 45 + i * 5, f"Embedded source {SONG_IDS[i]}")
+    source_pack = _stack_packs([p for p in packs if p is not None])
 
-    prog("match", 80, "Matching sequence")
+    prog("index", 72, "Indexing source clips")
+    source_index = build_source_index(source_segs, source_pack)
+
+    prog("match", 78, "Matching sequence")
     target_starts = np.array([s.start_s for s in target_segs], dtype=np.float64)
     match_params = MatchParams(
         top_k=cfg.top_k,
@@ -130,9 +151,10 @@ def run_job(
         lambda_jump=cfg.lambda_jump,
         jump_norm_s=cfg.jump_norm_s,
         lambda_self=cfg.lambda_self,
+        lambda_concat=cfg.lambda_concat,
         hop_s=cfg.hop_s,
     )
-    match = match_sequence(target_emb, target_starts, source_index, match_params)
+    match = match_sequence(target_pack, target_starts, source_index, match_params)
 
     prog("reconstruct", 90, "Overlap-add reconstruction")
     recon = reconstruct_ola(
@@ -199,8 +221,8 @@ def main() -> None:
     p.add_argument("target")
     p.add_argument("sources", nargs=5)
     p.add_argument("-o", "--out", default="out")
-    p.add_argument("--window", type=float, default=0.5)
-    p.add_argument("--hop", type=float, default=0.25)
+    p.add_argument("--window", type=float, default=1.0)
+    p.add_argument("--hop", type=float, default=0.5)
     args = p.parse_args()
 
     def on_progress(stage: str, pct: float, msg: str) -> None:

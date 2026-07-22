@@ -45,7 +45,30 @@ export type AudioInput = {
   url: string
 }
 
+export type YouTubeHit = {
+  id: string
+  title: string
+  url: string
+  duration_s?: number | null
+  channel?: string | null
+}
+
 const BASE = ''
+
+export async function searchYouTube(
+  q: string,
+  instrumental = true,
+): Promise<YouTubeHit[]> {
+  const params = new URLSearchParams({
+    q,
+    limit: '12',
+    instrumental: instrumental ? 'true' : 'false',
+  })
+  const res = await fetch(`${BASE}/api/youtube/search?${params}`)
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json()
+  return (data.results || []) as YouTubeHit[]
+}
 
 export async function createJob(
   target: AudioInput,
