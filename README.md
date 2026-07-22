@@ -12,13 +12,11 @@ npm run dev
 
 Open **http://localhost:5173**.
 
-Each slot accepts an **MP3 upload** or a **YouTube URL** (yt-dlp → mp3; needs ffmpeg + network).
+Each slot accepts an **MP3 upload** or a **YouTube URL**. In-app search uses top results for `\"{query} songs\"` (e.g. piano → piano songs).
 
-**Requirements:** Node 20+, Python 3.11+, [uv](https://github.com/astral-sh/uv), ffmpeg.
+**Embeddings:** prefers **CLAP** (`laion/larger_clap_music_and_speech`) hybridized with key-invariant chroma; falls back to handcrafted MFCC if torch/transformers aren't available.
 
-Tracks must be **5 seconds–8 minutes**. Optimized for **instrumentals** (piano, guitar, ambient). Search YouTube in-app — results auto-append “instrumental”.
-
-Matching uses **key-invariant chroma** (harmony) + timbre + energy, with strong continuity penalties so the quilt prefers longer musical runs.
+Tracks must be **5 seconds–8 minutes** at download/process time.
 
 ### CLI (no UI)
 

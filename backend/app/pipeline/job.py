@@ -12,7 +12,7 @@ from typing import Callable
 import numpy as np
 
 from app.pipeline.audio_io import load_and_normalize, write_wav
-from app.pipeline.features import EmbPack, MusicalExtractor
+from app.pipeline.features import EmbPack, get_extractor
 from app.pipeline.index import build_source_index
 from app.pipeline.match import MatchParams, match_sequence
 from app.pipeline.palette import SONG_COLORS, SONG_IDS
@@ -58,6 +58,7 @@ def _stack_packs(parts: list[EmbPack]) -> EmbPack:
         chroma=np.vstack([p.chroma for p in parts]),
         timbre=np.vstack([p.timbre for p in parts]),
         energy=np.vstack([p.energy for p in parts]),
+        backend=parts[0].backend if parts else "handcrafted",
     )
 
 
@@ -113,9 +114,8 @@ def run_job(
             segment_audio(y, sr, sid, window_s=cfg.window_s, hop_s=cfg.hop_s)  # type: ignore[arg-type]
         )
 
-    extractor = MusicalExtractor()
-
-    prog("features", 28, "Embedding target")
+    extractor = get_extractor(prefer_clap=True)
+    prog("features", 26, f"Embedding target ({extractor.name})")
     target_pack = extractor.embed_segments(
         target_y,
         sr,
@@ -133,11 +133,17 @@ def run_job(
 
     packs: list[EmbPack | None] = [None] * 5
     items = [(i, sid, y) for i, (sid, y) in enumerate(sources_typed)]  # type: ignore[misc]
-    # Parallelize CPU-bound librosa across songs (threads release GIL in numpy/numba paths)
-    with ThreadPoolExecutor(max_workers=min(5, len(items))) as pool:
-        for i, pack in pool.map(_embed_source, items):
+    # Parallelize only for handcrafted (CLAP+MPS/CUDA is happier single-threaded batches)
+    if extractor.name == "handcrafted":
+        with ThreadPoolExecutor(max_workers=min(5, len(items))) as pool:
+            for i, pack in pool.map(_embed_source, items):
+                packs[i] = pack
+                prog("features", 45 + i * 5, f"Embedded source {SONG_IDS[i]}")
+    else:
+        for item in items:
+            i, pack = _embed_source(item)
             packs[i] = pack
-            prog("features", 45 + i * 5, f"Embedded source {SONG_IDS[i]}")
+            prog("features", 45 + i * 5, f"CLAP source {SONG_IDS[i]}")
     source_pack = _stack_packs([p for p in packs if p is not None])
 
     prog("index", 72, "Indexing source clips")
@@ -195,6 +201,7 @@ def run_job(
             "transitions_viterbi": match.transitions_viterbi,
             "transitions_greedy": match.transitions_greedy,
             "num_tiles": len(match.tiles),
+            "embedding_backend": target_pack.backend,
         },
     }
     mosaic_path = out / "mosaic.json"

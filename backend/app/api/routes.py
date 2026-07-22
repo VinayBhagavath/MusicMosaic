@@ -226,16 +226,12 @@ async def create_job(
 
 
 @router.get("/youtube/search", response_model=YouTubeSearchResponse)
-def youtube_search(
-    q: str,
-    limit: int = 12,
-    instrumental: bool = True,
-) -> YouTubeSearchResponse:
+def youtube_search(q: str, limit: int = 10) -> YouTubeSearchResponse:
     q = (q or "").strip()
     if len(q) < 2:
         raise HTTPException(400, "Query too short")
     try:
-        hits = search_youtube(q, limit=limit, instrumental=instrumental)
+        hits = search_youtube(q, limit=limit)
     except Exception as e:
         raise HTTPException(502, f"YouTube search failed: {e}") from e
     return YouTubeSearchResponse(

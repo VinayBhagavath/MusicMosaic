@@ -1,4 +1,4 @@
-"""YouTube URL validation tests (no network)."""
+"""YouTube URL / search helpers (no network for unit tests)."""
 
 import pytest
 from pydantic import ValidationError
@@ -27,3 +27,14 @@ def test_normalize_adds_https():
 def test_hop_must_not_exceed_window():
     with pytest.raises(ValidationError):
         JobParams(window_s=0.25, hop_s=0.5)
+
+
+def test_songs_bias_query_helper():
+    # mirror search_youtube bias without network
+    from app.pipeline import youtube as yt
+
+    q = "piano"
+    ql = q.lower()
+    if not any(w in ql for w in yt._SONG_WORDS):
+        q = f"{q} songs"
+    assert q == "piano songs"

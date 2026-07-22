@@ -78,9 +78,9 @@ export function UploadPanel({ onSubmit, busy }: Props) {
     setSearching(true)
     setSearchErr(null)
     try {
-      const res = await searchYouTube(searchQ, true)
+      const res = await searchYouTube(searchQ)
       setHits(res)
-      if (!res.length) setSearchErr('No instrumental results in the 5s–8min range.')
+      if (!res.length) setSearchErr('No results found.')
     } catch (e) {
       setSearchErr(e instanceof Error ? e.message : String(e))
       setHits([])
@@ -98,11 +98,10 @@ export function UploadPanel({ onSubmit, busy }: Props) {
   return (
     <section className="upload">
       <div className="hero-copy">
-        <p className="eyebrow">Instrumental collage</p>
+        <p className="eyebrow">Acoustic collage</p>
         <h1 className="brand">Music Mosaic</h1>
         <p className="lede">
-          Rebuild an instrumental from five others — search YouTube or drop MP3s.
-          Tuned for harmony &amp; continuity (vocals later).
+          Rebuild one song from five others — search YouTube for tracks or drop MP3s.
         </p>
         <div className="hero-mosaic" aria-hidden>
           {Array.from({ length: 36 }, (_, i) => (
@@ -124,7 +123,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
             className="yt-query"
             value={searchQ}
             disabled={busy}
-            placeholder='Search instrumentals — e.g. "piano", "lofi guitar"'
+            placeholder='Search songs — e.g. "piano", "lofi", "jazz guitar"'
             onChange={(e) => setSearchQ(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void runSearch()}
           />
@@ -226,8 +225,8 @@ export function UploadPanel({ onSubmit, busy }: Props) {
       </div>
 
       <p className="hint">
-        Best with instrumentals (piano, guitar, ambient). Voice is harder — we match harmony &amp;
-        timbre with key-invariant chroma and long continuous runs.
+        Search returns top song results (e.g. “piano” → “piano songs”). Matching uses
+        key-invariant chroma + pretrained CLAP when available.
       </p>
 
       <div className="actions">

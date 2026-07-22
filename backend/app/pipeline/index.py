@@ -33,14 +33,23 @@ class SourceIndex:
         query: EmbPack,
         *,
         k: int = 12,
-        w_chroma: float = 0.55,
-        w_timbre: float = 0.35,
-        w_energy: float = 0.10,
+        w_chroma: float | None = None,
+        w_timbre: float | None = None,
+        w_energy: float | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return (scores [n_q,k], ids [n_q,k]) — higher is better.
 
         Chroma similarity is key-invariant (best of 12 pitch-class rotations).
         """
+        # CLAP timbre is stronger semantically; handcrafted MFCC less so
+        if query.backend == "clap-hybrid":
+            w_chroma = 0.40 if w_chroma is None else w_chroma
+            w_timbre = 0.50 if w_timbre is None else w_timbre
+            w_energy = 0.10 if w_energy is None else w_energy
+        else:
+            w_chroma = 0.55 if w_chroma is None else w_chroma
+            w_timbre = 0.35 if w_timbre is None else w_timbre
+            w_energy = 0.10 if w_energy is None else w_energy
         n_q = query.chroma.shape[0]
         n_s = self.n
         if n_q == 0 or n_s == 0:

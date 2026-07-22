@@ -55,14 +55,10 @@ export type YouTubeHit = {
 
 const BASE = ''
 
-export async function searchYouTube(
-  q: string,
-  instrumental = true,
-): Promise<YouTubeHit[]> {
+export async function searchYouTube(q: string): Promise<YouTubeHit[]> {
   const params = new URLSearchParams({
     q,
-    limit: '12',
-    instrumental: instrumental ? 'true' : 'false',
+    limit: '10',
   })
   const res = await fetch(`${BASE}/api/youtube/search?${params}`)
   if (!res.ok) throw new Error(await res.text())

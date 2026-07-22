@@ -1,4 +1,4 @@
-"""YouTube / yt-dlp audio download helpers."""
+"""YouTube / yt-dlp audio download + search helpers."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ _YT_RE = re.compile(
     r"^(https?://)?(www\.)?(youtube\.com|youtu\.be|m\.youtube\.com)/",
     re.IGNORECASE,
 )
+_SONG_WORDS = ("song", "songs", "music", "track", "tracks", "audio", "official")
 
 
 def is_youtube_url(url: str) -> bool:
@@ -84,13 +85,11 @@ def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path
     return path, title
 
 
-def search_youtube(
-    query: str,
-    *,
-    limit: int = 12,
-    instrumental: bool = True,
-) -> list[dict]:
-    """Search YouTube via yt-dlp (no API key). Prefers instrumental results when enabled."""
+def search_youtube(query: str, *, limit: int = 10) -> list[dict]:
+    """Top YouTube results for a song-oriented query (no instrumental bias).
+
+    \"piano\" → searches \"piano songs\" so ranking favors tracks, not tutorials.
+    """
     try:
         import yt_dlp
     except ImportError as e:
@@ -99,8 +98,9 @@ def search_youtube(
     q = query.strip()
     if not q:
         raise ValueError("Empty search query")
-    if instrumental and "instrumental" not in q.lower():
-        q = f"{q} instrumental"
+    ql = q.lower()
+    if not any(w in ql for w in _SONG_WORDS):
+        q = f"{q} songs"
 
     limit = max(1, min(int(limit), 20))
     opts = {
@@ -125,11 +125,10 @@ def search_youtube(
         if not url:
             continue
         dur = entry.get("duration")
-        # Prefer clips in our supported duration band when known
+        # Drop only ultra-short shorts; keep full song-length results for picking
         if dur is not None:
             try:
-                d = float(dur)
-                if d < MIN_DURATION_S or d > MAX_DURATION_S:
+                if float(dur) < 20:
                     continue
             except (TypeError, ValueError):
                 pass
