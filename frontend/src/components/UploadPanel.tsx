@@ -225,8 +225,8 @@ export function UploadPanel({ onSubmit, busy }: Props) {
       </div>
 
       <p className="hint">
-        Search returns top song results (e.g. “piano” → “piano songs”). Matching uses
-        key-invariant chroma + pretrained CLAP when available.
+        Search returns songs between 5 seconds and 5 minutes (e.g. “piano” → “piano songs”).
+        Matching uses key-invariant chroma + pretrained CLAP when available.
       </p>
 
       <div className="actions">

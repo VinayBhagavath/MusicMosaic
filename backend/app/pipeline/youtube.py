@@ -86,9 +86,9 @@ def download_youtube_audio(url: str, dest_dir: Path, *, stem: str) -> tuple[Path
 
 
 def search_youtube(query: str, *, limit: int = 10) -> list[dict]:
-    """Top YouTube results for a song-oriented query (no instrumental bias).
+    """Top YouTube song results for a query (no instrumental bias).
 
-    \"piano\" → searches \"piano songs\" so ranking favors tracks, not tutorials.
+    \"piano\" → searches \"piano songs\". Only keeps clips in [5s, 5min].
     """
     try:
         import yt_dlp
@@ -102,7 +102,12 @@ def search_youtube(query: str, *, limit: int = 10) -> list[dict]:
     if not any(w in ql for w in _SONG_WORDS):
         q = f"{q} songs"
 
-    limit = max(1, min(int(limit), 20))
+    # Over-fetch then filter by duration so we still return ~limit valid songs
+    fetch_n = max(1, min(int(limit) * 4, 40))
+    want = max(1, min(int(limit), 20))
+    min_s = MIN_DURATION_S  # 5s
+    max_s = 5 * 60.0  # 5 minutes — search filter (stricter than process max)
+
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -111,12 +116,12 @@ def search_youtube(query: str, *, limit: int = 10) -> list[dict]:
         "socket_timeout": 30,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
+        info = ydl.extract_info(f"ytsearch{fetch_n}:{q}", download=False)
 
     results: list[dict] = []
     for entry in (info or {}).get("entries") or []:
-        if not entry:
-            continue
+        if not entry or len(results) >= want:
+            break
         vid = entry.get("id") or ""
         title = entry.get("title") or "Untitled"
         url = entry.get("url") or entry.get("webpage_url")
@@ -125,19 +130,20 @@ def search_youtube(query: str, *, limit: int = 10) -> list[dict]:
         if not url:
             continue
         dur = entry.get("duration")
-        # Drop only ultra-short shorts; keep full song-length results for picking
-        if dur is not None:
-            try:
-                if float(dur) < 20:
-                    continue
-            except (TypeError, ValueError):
-                pass
+        if dur is None:
+            continue  # unknown length — skip so only valid songs appear
+        try:
+            d = float(dur)
+        except (TypeError, ValueError):
+            continue
+        if d < min_s or d > max_s:
+            continue
         results.append(
             {
                 "id": str(vid or url),
                 "title": str(title),
                 "url": str(url),
-                "duration_s": float(dur) if dur is not None else None,
+                "duration_s": d,
                 "channel": entry.get("uploader") or entry.get("channel"),
             }
         )
