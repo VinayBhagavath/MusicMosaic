@@ -189,11 +189,10 @@ def test_onset_align_moves_attack():
     n = sr
     y = np.zeros(n, np.float32)
     ref = np.zeros(n, np.float32)
-    y[int(0.4 * sr) : int(0.4 * sr) + 64] = 1.0
+    y[int(0.12 * sr) : int(0.12 * sr) + 64] = 1.0
     ref[int(0.1 * sr) : int(0.1 * sr) + 64] = 1.0
     out = align_onset_to_ref(y, ref, sr)
-    # Peak should move earlier toward ref
-    assert int(np.argmax(np.abs(out))) < int(0.25 * sr)
+    assert abs(int(np.argmax(np.abs(out))) - int(0.1 * sr)) < int(0.015 * sr)
 
 
 def test_onset_align_zero_pads_instead_of_wrapping_tail():
@@ -204,9 +203,23 @@ def test_onset_align_zero_pads_instead_of_wrapping_tail():
     ref = np.zeros(sr, np.float32)
     y[int(0.1 * sr) : int(0.1 * sr) + 64] = 1.0
     y[int(0.9 * sr) : int(0.9 * sr) + 64] = 0.5
-    ref[int(0.4 * sr) : int(0.4 * sr) + 64] = 1.0
+    ref[int(0.12 * sr) : int(0.12 * sr) + 64] = 1.0
     out = align_onset_to_ref(y, ref, sr)
-    assert np.max(np.abs(out[: int(0.25 * sr)])) == 0.0
+    assert np.max(np.abs(out[: int(0.015 * sr)])) == 0.0
+    assert np.max(np.abs(out[int(0.91 * sr) :])) > 0.1
+
+
+def test_onset_align_caps_tracker_mistakes():
+    from app.pipeline.transform import align_onset_to_ref
+
+    sr = 22050
+    y = np.zeros(sr, np.float32)
+    ref = np.zeros(sr, np.float32)
+    y[int(0.4 * sr) : int(0.4 * sr) + 64] = 1.0
+    ref[int(0.1 * sr) : int(0.1 * sr) + 64] = 1.0
+    out = align_onset_to_ref(y, ref, sr)
+    # A bad detector cannot erase a third of the tile; correction is ≤40 ms.
+    assert int(np.argmax(np.abs(out))) >= int(0.35 * sr)
 
 
 def test_f0_semitone_delta_octave():

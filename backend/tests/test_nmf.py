@@ -62,6 +62,60 @@ def test_nmf_can_use_source_only_phase_reference():
     assert quality_metrics(target, result.audio, sr)["chroma_similarity"] > 0.95
 
 
+def test_nmf_reconstructs_polyphonic_instrumental_chord():
+    sr = 8000
+    tones = {
+        "root": _tone(sr, 220.0),
+        "third": _tone(sr, 275.0),
+        "fifth": _tone(sr, 330.0),
+    }
+    target = sum(tones.values()).astype(np.float32) / 3.0
+    source_phase_reference = sum(tones.values()).astype(np.float32) / 3.0
+    result = reconstruct_nmf(
+        target,
+        tones,
+        sr,
+        params=NMFParams(
+            n_fft=512,
+            hop_length=128,
+            n_mels=32,
+            candidate_k=10,
+            nearest_k=6,
+            iterations=5,
+            polyphony=5,
+        ),
+        # Production uses the source-only unit renderer for coherent phase.
+        phase_reference=source_phase_reference,
+    )
+    metrics = quality_metrics(target, result.audio, sr)
+    assert result.active_polyphony >= 2.0
+    assert metrics["chroma_similarity"] > 0.78
+
+
+def test_nmf_never_mixes_target_waveform_into_silent_sources():
+    sr = 8000
+    target = _tone(sr, 440.0)
+    silence = np.zeros_like(target)
+    result = reconstruct_nmf(
+        target,
+        {"A": silence, "B": silence},
+        sr,
+        params=NMFParams(
+            n_fft=512,
+            hop_length=128,
+            n_mels=24,
+            candidate_k=4,
+            nearest_k=2,
+            iterations=2,
+            polyphony=2,
+        ),
+        # Even with a target-like control signal, no source energy means no
+        # output: phase is not a waveform carrier by itself.
+        phase_reference=target,
+    )
+    assert float(np.max(np.abs(result.audio))) < 1e-7
+
+
 def test_auto_gate_accepts_real_improvement_and_rejects_tradeoff():
     baseline = {
         "log_mel_distance": 0.73,

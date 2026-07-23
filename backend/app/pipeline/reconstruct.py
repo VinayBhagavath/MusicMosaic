@@ -393,9 +393,17 @@ def reconstruct_ola(
         onset_tol=onset_tol,
     )
 
-    # Render length reaches one crossfade into the next tile so the overlap is
-    # real, continuing source audio rather than a fade into silence.
-    render_lens = [spans[i] + (seam_xf[i] if i + 1 < len(tiles) else 0) for i in range(len(tiles))]
+    # Preserve the detected note/release duration. Previously interior tiles
+    # always stopped just after the next onset, even when segmentation had
+    # measured a longer target event, which chopped instrumental sustain tails.
+    # Keep at least enough audio for the paired seam crossfade.
+    render_lens = [
+        max(
+            tile_wins[i],
+            spans[i] + (seam_xf[i] if i + 1 < len(tiles) else 0),
+        )
+        for i in range(len(tiles))
+    ]
     max_win = max([base_win, *render_lens])
 
     out_len = int(round(target_duration_s * sr))
@@ -568,7 +576,15 @@ def reconstruct_ola(
             continue
         a = max(0, positions[i + 1])
         b = min(len(denom), a + xf)
-        denom[a:b] = np.sqrt(np.maximum(power_sum[a:b], 1e-12))
+        # Ease into/out of constant-power normalization. With release tails,
+        # more than two tiles may overlap; switching denominator formulas
+        # abruptly at the seam edge creates a zipper click.
+        n = b - a
+        if n > 0:
+            t = np.linspace(0.0, np.pi, n, endpoint=True, dtype=np.float32)
+            blend = np.sin(t) ** 2
+            power_denom = np.sqrt(np.maximum(power_sum[a:b], 1e-12))
+            denom[a:b] = (1.0 - blend) * denom[a:b] + blend * power_denom
     nz = denom > 1e-6
     acc[nz] /= denom[nz]
     out = acc[:out_len]

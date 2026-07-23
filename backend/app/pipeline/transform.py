@@ -111,8 +111,14 @@ def onset_peak_index(y: np.ndarray, sr: int) -> int:
         return int(np.argmax(np.abs(y)))
 
 
-def align_onset_to_ref(y: np.ndarray, ref: np.ndarray, sr: int) -> np.ndarray:
-    """Shift `y` with zero padding so its attack lines up with `ref`."""
+def align_onset_to_ref(
+    y: np.ndarray,
+    ref: np.ndarray,
+    sr: int,
+    *,
+    max_shift_s: float = 0.04,
+) -> np.ndarray:
+    """Micro-align an attack without allowing destructive large truncations."""
     if len(y) < 64 or len(ref) < 64:
         return y.astype(np.float32, copy=False)
     yi = onset_peak_index(y, sr)
@@ -120,14 +126,25 @@ def align_onset_to_ref(y: np.ndarray, ref: np.ndarray, sr: int) -> np.ndarray:
     shift = int(ri - yi)
     if abs(shift) < max(8, int(0.004 * sr)):
         return y.astype(np.float32, copy=False)
-    max_shift = len(y) // 3
+    # Segmentation already starts clips near attacks. A larger disagreement is
+    # usually an onset-tracker error; shifting by a third of a short tile used
+    # to erase note tails and create audible zero-filled gaps.
+    max_shift = min(len(y) // 3, max(1, int(round(max_shift_s * sr))))
     shift = int(np.clip(shift, -max_shift, max_shift))
     src = y.astype(np.float32, copy=False)
     out = np.zeros_like(src)
+    guard = min(max(8, int(round(0.004 * sr))), max(1, len(src) // 8))
+    ramp = np.sin(np.linspace(0.0, 0.5 * np.pi, guard, dtype=np.float32))
     if shift > 0:
         out[shift:] = src[:-shift]
+        n = min(guard, len(out) - shift)
+        out[shift : shift + n] *= ramp[:n]
     elif shift < 0:
         out[:shift] = src[-shift:]
+        edge = len(out) + shift
+        n = min(guard, edge)
+        if n > 0:
+            out[edge - n : edge] *= ramp[:n][::-1]
     else:
         out[:] = src
     return out

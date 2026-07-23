@@ -24,18 +24,21 @@ Band and morphed toward the target envelope and spectrum.
 
 **Legibility:** the default `auto` renderer now tests a **full-song sparse diagonal NMF spectral
 mosaic**, based on Driedger et al., *Let It Bee* (ISMIR 2015), against the unit reconstruction.
-It learns `target magnitude V ≈ fixed source spectra W × sparse activations H`, while suppressing
-repeated frames, limiting polyphony, and rewarding time-continuous diagonal source runs. The
-existing source-only unit renderer supplies coherent phase; NMF supplies the more accurate
-source-basis notes/chords. Auto mode accepts NMF only when a conservative gate improves combined
-chroma, onset, and log-mel diagnostics without materially regressing any one of them. Otherwise
-the existing unit renderer remains the result. On the included Interstellar preset, the measured
-comparison improved chroma `0.729 → 0.805`, onset correlation `0.258 → 0.638`, and log-mel
-distance `0.758 → 0.543` (lower is better).
+It learns `target magnitude V ≈ fixed source spectra W × sparse activations H` with a joint
+mel-spectrum + chroma objective. Candidate diversity and adaptive polyphony retain instrumental
+chords, while target-aware repetition control and short temporal smoothing reduce atom flicker.
+The existing source-only unit renderer supplies coherent phase; NMF supplies the more accurate
+source-basis notes/chords. No target samples or target phase are mixed into the output: target
+analysis controls selection, pitch, timing, dynamics, and spectral shaping of source audio.
+Auto mode accepts NMF only when a conservative gate improves combined chroma, onset, and log-mel
+diagnostics without materially regressing any one of them. On the included instrumental
+Interstellar preset, the latest comparison improved chroma `0.669 → 0.897`, onset correlation
+`0.322 → 0.767`, and log-mel distance `0.747 → 0.555` (lower is better).
 
 The unit renderer still applies per-note harmonic reconstruction and onset-synchronous seams:
 target attacks use a short ~10 ms overlap to stay crisp without grainy hard splices, while
-sustained boundaries keep the full ~30 ms equal-power fade.
+sustained boundaries keep the full ~30 ms equal-power fade. Detected release tails continue
+past the next onset instead of being truncated.
 
 Fidelity mode deliberately does **not** force equal use of all five songs: a source may dominate
 when it is the closest acoustic match. Turn Fidelity first off in Advanced parameters for a more

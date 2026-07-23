@@ -65,7 +65,7 @@ class JobConfig:
     # auto: render both and accept NMF only through the objective quality gate.
     reconstruction_backend: str = "auto"
     nmf_iterations: int = 8
-    nmf_polyphony: int = 3
+    nmf_polyphony: int = 5
     use_stems: bool = False
     prefer_clap: bool = False
 

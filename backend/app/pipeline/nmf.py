@@ -39,11 +39,16 @@ class NMFParams:
     n_mels: int = 48
     candidate_k: int = 16
     nearest_k: int = 8
-    polyphony: int = 3
+    # Maximum simultaneous source atoms. The effective value is estimated from
+    # the target chroma, so monophonic vocals stay sparse while chords may use
+    # more atoms.
+    polyphony: int = 5
     iterations: int = 8
     continuity: float = 0.42
     repetition: int = 3
     repetition_suppression: float = 0.18
+    temporal_smoothing: float = 0.28
+    phase_coherence_blend: float = 0.16
 
 
 @dataclass(slots=True)
@@ -86,10 +91,41 @@ def _frame_features(
     ).astype(np.complex64)
     mel = (mel_basis @ np.abs(X)).T.astype(np.float32)
     mel_shape = _safe_l1_rows(mel)
-    # Log compression makes nearest-neighbor retrieval care about quiet
-    # harmonics, not only the loudest bass partial.
-    search = _safe_unit_rows(np.log1p(80.0 * mel_shape))
-    return X, mel_shape, search
+    # Mel shape finds similar timbre, while chroma makes the retrieval robust
+    # across instrumentation and preserves the actual notes/chords. This is
+    # especially important for instrumentals: vocal frames already have a
+    # dominant harmonic track, but a chord can otherwise be matched mostly by
+    # broad spectral color.
+    mel_search = _safe_unit_rows(np.log1p(80.0 * mel_shape))
+    chroma = librosa.feature.chroma_stft(
+        S=np.abs(X) ** 2,
+        sr=sr,
+        n_fft=params.n_fft,
+        hop_length=params.hop_length,
+    ).T.astype(np.float32)
+    chroma_shape = _safe_l1_rows(chroma)
+    chroma = _safe_unit_rows(chroma)
+    n = min(len(mel_search), len(chroma))
+    search = _safe_unit_rows(
+        np.concatenate(
+            [
+                np.sqrt(0.65) * mel_search[:n],
+                np.sqrt(0.35) * chroma[:n],
+            ],
+            axis=1,
+        )
+    )
+    # KL-NMF must optimize the notes as well as broad color. A mel-only
+    # objective can approximate a whole chord with one middle-frequency atom,
+    # which is why vocal melodies worked while instrumental harmony vanished.
+    objective_shape = np.concatenate(
+        [
+            0.42 * mel_shape[:n],
+            0.58 * chroma_shape[:n],
+        ],
+        axis=1,
+    ).astype(np.float32)
+    return X[:, :n], objective_shape, search
 
 
 def _source_dictionary(
@@ -142,6 +178,26 @@ def _candidate_beam(
     if nearest.ndim == 1:
         nearest = nearest[:, None]
 
+    # A global nearest-neighbor list can be monopolized by many adjacent frames
+    # from one song. Reserve candidates from every source so polyphonic targets
+    # can combine complementary notes/timbres across songs.
+    per_song_nearest: list[np.ndarray] = []
+    for song in np.unique(source_song):
+        song_ids = np.flatnonzero(source_song == song)
+        if not len(song_ids):
+            continue
+        take = min(2, len(song_ids))
+        song_tree = cKDTree(source_search[song_ids])
+        _song_dist, song_local = song_tree.query(
+            target_search,
+            k=take,
+            workers=-1,
+        )
+        song_local = np.asarray(song_local, dtype=np.int64)
+        if song_local.ndim == 1:
+            song_local = song_local[:, None]
+        per_song_nearest.append(song_ids[song_local])
+
     # Global-id lookup for source-frame neighbors. Each song's frames are
     # contiguous in the dictionary, but use an explicit map to guard boundaries.
     lookup = {
@@ -161,6 +217,9 @@ def _candidate_beam(
 
         for idx in row:
             add(int(idx))
+        for song_candidates in per_song_nearest:
+            for idx in song_candidates[t]:
+                add(int(idx))
         # Neighboring source frames make diagonal continuation available even
         # when only the center frame was returned by spectral nearest-neighbor.
         for idx in row[: max(1, nearest_k // 2)]:
@@ -187,14 +246,62 @@ def _candidate_beam(
     return out
 
 
-def _limit_polyphony(H: np.ndarray, polyphony: int) -> np.ndarray:
+def _limit_polyphony(
+    H: np.ndarray,
+    polyphony: int,
+    *,
+    candidates: np.ndarray | None = None,
+    source_song: np.ndarray | None = None,
+) -> np.ndarray:
     p = int(np.clip(polyphony, 1, H.shape[1]))
+    values = H
+    if candidates is not None and source_song is not None:
+        # Adjacent frames from one source often have nearly identical scores.
+        # Keeping several of them wastes all polyphony slots on one note/timbre
+        # and creates phasey combing. Retain the strongest atom per source song
+        # before selecting the final cross-song mixture.
+        song_at_candidate = source_song[candidates]
+        diverse_mask = np.zeros_like(H, dtype=bool)
+        rows = np.arange(len(H))
+        for song in np.unique(source_song):
+            eligible = song_at_candidate == song
+            if not np.any(eligible):
+                continue
+            best = np.argmax(np.where(eligible, H, -np.inf), axis=1)
+            valid = np.any(eligible, axis=1)
+            diverse_mask[rows[valid], best[valid]] = True
+        values = np.where(diverse_mask, H, 0.0)
     if p >= H.shape[1]:
-        return H
-    keep = np.argpartition(H, -p, axis=1)[:, -p:]
+        return values.astype(np.float32)
+    keep = np.argpartition(values, -p, axis=1)[:, -p:]
     mask = np.zeros_like(H, dtype=bool)
     np.put_along_axis(mask, keep, True, axis=1)
-    return np.where(mask, H, 0.0).astype(np.float32)
+    return np.where(mask, values, 0.0).astype(np.float32)
+
+
+def _estimate_polyphony(target_X: np.ndarray, sr: int, params: NMFParams) -> int:
+    """Estimate simultaneous pitch classes, bounded by the configured maximum."""
+    maximum = max(1, int(params.polyphony))
+    if maximum <= 1 or target_X.shape[1] < 2:
+        return maximum
+    try:
+        chroma = librosa.feature.chroma_stft(
+            S=np.abs(target_X) ** 2,
+            sr=sr,
+            n_fft=params.n_fft,
+            hop_length=params.hop_length,
+        )
+        peaks = np.max(chroma, axis=0, keepdims=True)
+        active = np.sum(chroma >= np.maximum(1e-6, peaks * 0.32), axis=0)
+        voiced = peaks.reshape(-1) > 1e-6
+        if not np.any(voiced):
+            return 1
+        # The upper-middle frame is representative of sustained chords without
+        # letting broadband drum hits force every frame to maximum polyphony.
+        estimate = int(round(float(np.percentile(active[voiced], 65))))
+        return int(np.clip(estimate, 1, maximum))
+    except Exception:
+        return min(3, maximum)
 
 
 def _diagonal_continuity(
@@ -226,17 +333,26 @@ def _diagonal_continuity(
 def _suppress_repetition(
     H: np.ndarray,
     candidates: np.ndarray,
+    target_shapes: np.ndarray,
     radius: int,
     suppression: float,
 ) -> np.ndarray:
-    """Suppress repeated use of the exact same source frame in nearby targets."""
+    """Suppress stutter only while the target spectrum is actually changing."""
     if radius <= 0 or len(H) < 2:
         return H
     out = H.copy()
     for lag in range(1, min(radius, len(H) - 1) + 1):
         same = candidates[lag:, :, None] == candidates[:-lag, None, :]
         prior = np.max(np.where(same, out[:-lag, None, :], 0.0), axis=2)
-        repeated = prior >= out[lag:]
+        target_change = np.sum(
+            np.abs(target_shapes[lag:] - target_shapes[:-lag]),
+            axis=1,
+        )
+        # Reusing a source frame is correct for held vowels and sustained
+        # instrumental chords. It sounds like stutter only when the target has
+        # moved on but the same atom remains pinned.
+        changing = target_change > 0.08
+        repeated = (prior >= out[lag:]) & changing[:, None]
         out[lag:] = np.where(repeated, out[lag:] * suppression, out[lag:])
     return out.astype(np.float32)
 
@@ -268,6 +384,7 @@ def _learn_activations(
         H = _suppress_repetition(
             H,
             candidates,
+            V,
             params.repetition,
             1.0 - progress * (1.0 - params.repetition_suppression),
         )
@@ -277,7 +394,12 @@ def _learn_activations(
         # Apply strict polyphony only in the latter half, as in the paper's
         # progressive constraints; early iterations may explore more atoms.
         if progress >= 0.5:
-            H = _limit_polyphony(H, params.polyphony)
+            H = _limit_polyphony(
+                H,
+                params.polyphony,
+                candidates=candidates,
+                source_song=source_song,
+            )
         H /= np.maximum(np.sum(H, axis=1, keepdims=True), 1e-8)
         if on_progress:
             on_progress(
@@ -354,22 +476,76 @@ def _synthesize(
             window="hann",
         )
 
+    def smooth_shape(magnitude: np.ndarray, energy: np.ndarray) -> np.ndarray:
+        """Suppress frame-to-frame atom flicker without blurring target dynamics."""
+        amount = float(np.clip(params.temporal_smoothing, 0.0, 1.0))
+        if amount <= 0 or magnitude.shape[1] < 3:
+            return magnitude
+        shape = magnitude / np.maximum(np.sum(magnitude, axis=0, keepdims=True), 1e-8)
+        padded = np.pad(shape, ((0, 0), (1, 1)), mode="edge")
+        smooth = 0.25 * padded[:, :-2] + 0.50 * padded[:, 1:-1] + 0.25 * padded[:, 2:]
+        blended = (1.0 - amount) * shape + amount * smooth
+        blended /= np.maximum(np.sum(blended, axis=0, keepdims=True), 1e-8)
+        return (blended * energy[None, :]).astype(np.float32)
+
     block = 256
     for start in range(0, n_frames, block):
         end = min(n_frames, start + block)
-        inv = inverse_candidates[start:end]
+        # One-frame halo keeps temporal smoothing continuous across blocks.
+        halo_start = max(0, start - 1)
+        halo_end = min(n_frames, end + 1)
+        inv = inverse_candidates[halo_start:halo_end]
         # [frequency, block, candidate]
         selected = atoms[:, inv]
-        weights = H[start:end]
+        weights = H[halo_start:halo_end]
         magnitude = np.einsum(
             "fbk,bk->fb", np.abs(selected), weights, optimize=True
         )
-        magnitude *= target_energy[start:end][None, :]
+        halo_energy = target_energy[halo_start:halo_end]
+        magnitude = smooth_shape(magnitude, halo_energy)
+        left = start - halo_start
+        right = left + (end - start)
+        magnitude = magnitude[:, left:right]
         if reference_X is not None and reference_X.shape[1] >= end:
+            # NMF magnitude paired with unrelated phase can sound metallic or
+            # static. Blend in a small amount of the source-only unit
+            # reference magnitude, scaled to the same frame energy, with more
+            # correction only when the two spectral shapes disagree.
+            ref_magnitude = np.abs(reference_X[:, start:end]).astype(np.float32)
+            dot = np.sum(magnitude * ref_magnitude, axis=0)
+            norm = (
+                np.linalg.norm(magnitude, axis=0)
+                * np.linalg.norm(ref_magnitude, axis=0)
+                + 1e-8
+            )
+            mismatch = 1.0 - np.clip(dot / norm, 0.0, 1.0)
+            base_blend = float(np.clip(params.phase_coherence_blend, 0.0, 1.0))
+            blend = base_blend * (0.35 + 0.65 * mismatch)
+            # Multiplicative shaping keeps zero source bins at zero: the phase
+            # reference can improve compatibility but can never inject its own
+            # magnitude or become an audio carrier.
+            source_shape = magnitude / np.maximum(
+                np.sum(magnitude, axis=0, keepdims=True),
+                1e-8,
+            )
+            ref_shape = ref_magnitude / np.maximum(
+                np.sum(ref_magnitude, axis=0, keepdims=True),
+                1e-8,
+            )
+            shape_ratio = np.clip(
+                ref_shape / np.maximum(source_shape, 1e-8),
+                0.5,
+                2.0,
+            )
+            magnitude *= np.exp(blend[None, :] * np.log(shape_ratio))
+            magnitude *= target_energy[start:end][None, :] / np.maximum(
+                np.sum(magnitude, axis=0, keepdims=True),
+                1e-8,
+            )
             phase = np.angle(reference_X[:, start:end])
         else:
             mixed = np.einsum("fbk,bk->fb", selected, weights, optimize=True)
-            phase = np.angle(mixed)
+            phase = np.angle(mixed[:, left:right])
         out_X[:, start:end] = magnitude * np.exp(1j * phase)
 
     audio = librosa.istft(
@@ -429,6 +605,21 @@ def reconstruct_nmf(
     target_X, target_shapes, target_search = _frame_features(
         target, sr, params=params, mel_basis=mel_basis
     )
+    effective_polyphony = _estimate_polyphony(target_X, sr, params)
+    effective_params = NMFParams(
+        n_fft=params.n_fft,
+        hop_length=params.hop_length,
+        n_mels=params.n_mels,
+        candidate_k=params.candidate_k,
+        nearest_k=params.nearest_k,
+        polyphony=effective_polyphony,
+        iterations=params.iterations,
+        continuity=params.continuity,
+        repetition=params.repetition,
+        repetition_suppression=params.repetition_suppression,
+        temporal_smoothing=params.temporal_smoothing,
+        phase_coherence_blend=params.phase_coherence_blend,
+    )
     if on_progress:
         on_progress(0.26, "NMF nearest source spectra")
     candidates = _candidate_beam(
@@ -444,7 +635,7 @@ def reconstruct_nmf(
         candidates,
         source_song,
         source_frame,
-        params=params,
+        params=effective_params,
         on_progress=on_progress,
     )
     atoms, inverse = _selected_complex_atoms(
@@ -454,7 +645,7 @@ def reconstruct_nmf(
         source_frame,
         candidates,
         sr,
-        params=params,
+        params=effective_params,
         on_progress=on_progress,
     )
     if on_progress:
@@ -465,7 +656,7 @@ def reconstruct_nmf(
         inverse,
         H,
         len(target),
-        params=params,
+        params=effective_params,
         phase_reference=phase_reference,
     )
 

@@ -87,6 +87,43 @@ def test_transitions_are_click_free_across_distinct_sources():
     assert float(np.max(np.abs(np.diff(out)))) < 0.05
 
 
+def test_variable_note_duration_preserves_release_tail():
+    sr = 8000
+    song_a = np.ones(sr, dtype=np.float32) * 0.4
+    song_b = np.zeros(sr, dtype=np.float32)
+    pack = EmbPack(
+        chroma=np.eye(2, 12, dtype=np.float32),
+        timbre=np.eye(2, 26, dtype=np.float32),
+        energy=np.ones((2, 4), dtype=np.float32),
+    )
+    source = SourceIndex(
+        meta=[
+            SourceMeta("A", 0.0, 0.5, 0),
+            SourceMeta("B", 0.0, 0.2, 0),
+        ],
+        waveforms=[song_a[:4000], song_b[:1600]],
+        pack=pack,
+        songs={"A": song_a, "B": song_b},
+        sr=sr,
+    )
+    tiles = [
+        TileMatch(0, 0.0, 0, "A", 0.0, 0.9, target_duration_s=0.5),
+        TileMatch(1, 0.2, 1, "B", 0.0, 0.9, target_duration_s=0.2),
+    ]
+    out = reconstruct_ola(
+        tiles,
+        source,
+        sr=sr,
+        window_s=0.5,
+        hop_s=0.2,
+        target_duration_s=0.7,
+        apply_key_shift=False,
+    )
+    # The first note remains audible beyond the next onset instead of being
+    # truncated at ~hop + crossfade.
+    assert float(np.mean(np.abs(out[int(0.35 * sr) : int(0.42 * sr)]))) > 0.1
+
+
 def test_onset_synchronous_seam_shortens_crossfade_at_attacks():
     """Target attacks use shorter overlaps; sustained seams keep ~30 ms."""
     sr = 22050
