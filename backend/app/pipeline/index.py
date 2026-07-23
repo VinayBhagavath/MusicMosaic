@@ -116,6 +116,20 @@ def _score_matrix(
     best_chroma = sim_all.max(axis=0).astype(np.float32)
     timbre = query.timbre @ pack.timbre.T
     energy = query.energy @ pack.energy.T
+    if (
+        query.level is not None
+        and pack.level is not None
+        and query.level.shape[1] == pack.level.shape[1]
+    ):
+        # Row-normalizing the compound dynamics descriptor preserves its shape
+        # but largely hides absolute note velocity. Blend in the peak-normalized
+        # track-relative dB level so quiet and loud target notes choose
+        # correspondingly quiet and loud source events.
+        level_sim = 1.0 - np.mean(
+            np.abs(query.level[:, None, :] - pack.level[None, :, :]),
+            axis=2,
+        )
+        energy = 0.72 * energy + 0.28 * np.clip(level_sim, 0.0, 1.0)
     register = 0.0
     register_weight = 0.0
     if (

@@ -30,6 +30,13 @@ export type MosaicTile = {
   layers?: MosaicLayer[]
 }
 
+export type QualityMetrics = {
+  log_mel_distance: number
+  chroma_similarity: number
+  onset_correlation: number
+  boundary_discontinuity: number
+}
+
 export type Mosaic = {
   window_s: number
   hop_s: number
@@ -47,14 +54,20 @@ export type Mosaic = {
     max_share?: number
     fidelity_first?: boolean
     embedding_backend?: string
+    reconstruction_backend?: 'unit' | 'nmf'
+    reconstruction_backend_requested?: 'auto' | 'unit' | 'nmf'
+    nmf_accepted?: boolean
+    unit_quality?: QualityMetrics | null
+    nmf_quality?: QualityMetrics | null
+    nmf?: {
+      spectral_error: number
+      active_polyphony: number
+      source_frames: number
+      target_frames: number
+    } | null
     use_stems?: boolean
     stage_timings_s?: Record<string, number>
-    quality?: {
-      log_mel_distance: number
-      chroma_similarity: number
-      onset_correlation: number
-      boundary_discontinuity: number
-    }
+    quality?: QualityMetrics
   }
 }
 
@@ -66,6 +79,7 @@ export type JobParams = {
   max_share: number
   n_layers: number
   fidelity_first: boolean
+  reconstruction_backend: 'auto' | 'unit' | 'nmf'
   use_stems?: boolean
 }
 
@@ -117,13 +131,14 @@ export async function createJob(
   fd.append('n_layers', String(params.n_layers))
   fd.append('layer_primary_weight', params.n_layers > 1 ? '0.62' : '1.0')
   fd.append('fidelity_first', String(params.fidelity_first))
+  fd.append('reconstruction_backend', params.reconstruction_backend)
   fd.append('use_stems', String(Boolean(params.use_stems)))
   // Fidelity defaults: exact global beam, short onset units, polyphonic fill.
   fd.append('min_run_tiles', '1')
   fd.append('lambda_concat', '0.55')
   fd.append('lambda_join', '0.7')
   fd.append('harmonic_match', 'true')
-  fd.append('harmonic_strength', '0.55')
+  fd.append('harmonic_strength', '0.42')
   fd.append('rerank_spectral', 'true')
   fd.append('onset_sync_xf', 'true')
   const res = await fetch(`${BASE}/api/jobs`, { method: 'POST', body: fd })

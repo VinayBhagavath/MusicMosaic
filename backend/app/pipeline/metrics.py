@@ -105,3 +105,58 @@ def quality_metrics(
             boundary_discontinuity(estimate, sr, boundaries_s), 4
         ),
     }
+
+
+def reconstruction_quality_score(metrics: dict[str, float]) -> float:
+    """Scalar used only to choose between two source-only render candidates.
+
+    Harmony and rhythm carry most of a song's identity. Log-mel distance keeps
+    the selector from choosing an unnaturally colored candidate merely because
+    its dominant notes line up.
+    """
+    chroma = float(metrics.get("chroma_similarity", 0.0))
+    onset = float(metrics.get("onset_correlation", 0.0))
+    log_mel = float(metrics.get("log_mel_distance", 2.0))
+    boundary = float(metrics.get("boundary_discontinuity", 0.0))
+    return (
+        0.48 * chroma
+        + 0.29 * onset
+        - 0.18 * min(2.0, log_mel) / 2.0
+        - 0.05 * min(1.0, boundary)
+    )
+
+
+def candidate_improves(
+    baseline: dict[str, float],
+    candidate: dict[str, float],
+    *,
+    min_score_gain: float = 0.02,
+) -> bool:
+    """Conservative auto-render acceptance gate.
+
+    The new renderer must improve the composite by a perceptually meaningful
+    margin and may not trade away harmony, rhythm, or spectral fit materially.
+    """
+    if float(candidate.get("chroma_similarity", 0.0)) + 0.005 < float(
+        baseline.get("chroma_similarity", 0.0)
+    ):
+        return False
+    if float(candidate.get("onset_correlation", 0.0)) + 0.03 < float(
+        baseline.get("onset_correlation", 0.0)
+    ):
+        return False
+    if float(candidate.get("log_mel_distance", 2.0)) > 1.05 * float(
+        baseline.get("log_mel_distance", 2.0)
+    ):
+        return False
+    baseline_boundary = float(baseline.get("boundary_discontinuity", 0.0))
+    candidate_boundary = float(candidate.get("boundary_discontinuity", 0.0))
+    if candidate_boundary > max(
+        baseline_boundary + 0.02,
+        baseline_boundary * 1.5,
+    ):
+        return False
+    return (
+        reconstruction_quality_score(candidate)
+        >= reconstruction_quality_score(baseline) + min_score_gain
+    )

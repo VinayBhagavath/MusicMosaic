@@ -26,9 +26,10 @@ class JobParams(BaseModel):
     layer_primary_weight: float = Field(0.62, ge=0.35, le=1.0)
     fidelity_first: bool = True
     harmonic_match: bool = True
-    harmonic_strength: float = Field(0.55, ge=0.0, le=1.0)
+    harmonic_strength: float = Field(0.42, ge=0.0, le=1.0)
     onset_sync_xf: bool = True
     rerank_spectral: bool = True
+    reconstruction_backend: Literal["auto", "unit", "nmf"] = "auto"
     use_stems: bool = False
 
     @model_validator(mode="after")

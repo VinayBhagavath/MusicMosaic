@@ -173,6 +173,36 @@ def time_stretch(y: np.ndarray, sr: int, rate: float) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
+def pitch_time_transform(
+    y: np.ndarray,
+    sr: int,
+    *,
+    n_steps: float,
+    rate: float,
+    formant_preserve: bool = True,
+) -> np.ndarray:
+    """Apply pitch and duration changes in one Rubber Band process."""
+    if abs(n_steps) < 1e-4:
+        return time_stretch(y, sr, rate)
+    if abs(rate - 1.0) < 1e-4:
+        return pitch_shift(y, sr, n_steps, formant_preserve=formant_preserve)
+    require_rubberband()
+    rate = float(np.clip(rate, 0.5, 2.0))
+    import pyrubberband.pyrb as pyrb
+
+    rbargs: dict[str, str | float] = {
+        "--pitch": float(n_steps),
+        "--tempo": rate,
+    }
+    if formant_preserve:
+        rbargs["--formant"] = ""
+    try:
+        out = pyrb.__rubberband(y.astype(np.float32, copy=False), sr, **rbargs)
+    except Exception as exc:
+        raise RuntimeError(f"Rubber Band pitch/time transform failed: {exc}") from exc
+    return np.asarray(out, dtype=np.float32)
+
+
 def fit_length(y: np.ndarray, n: int) -> np.ndarray:
     """Pad or trim to exactly n samples."""
     if len(y) == n:
@@ -190,22 +220,35 @@ def prepare_clip(
     start_s: float,
     *,
     target_n: int,
+    source_n: int | None = None,
     n_steps: float = 0.0,
     pad_s: float = 0.12,
     cache: dict | None = None,
     cache_key: str = "",
     formant_preserve: bool = True,
 ) -> np.ndarray:
-    """Slice → pitch-shift → time-stretch to target_n samples."""
+    """Slice one source event → pitch-shift → time-stretch to ``target_n``.
+
+    ``source_n`` is the detected source-note duration. When omitted, the
+    historical fixed-window behavior is retained.
+    """
     if target_n <= 0:
         return np.zeros(0, dtype=np.float32)
 
     a = max(0, int(round(start_s * sr)))
     pad = int(round(pad_s * sr))
-    raw_n = target_n
+    raw_n = max(1, int(source_n)) if source_n is not None else target_n
     a0 = max(0, a - pad)
     b0 = min(len(song), a + raw_n + pad)
-    key = (cache_key, a0, b0, round(n_steps, 1), target_n, formant_preserve)
+    key = (
+        cache_key,
+        a0,
+        b0,
+        raw_n,
+        round(n_steps, 1),
+        target_n,
+        formant_preserve,
+    )
     if cache is not None and key in cache:
         return cache[key]
 
@@ -216,19 +259,33 @@ def prepare_clip(
             cache[key] = out
         return out
 
-    shifted = (
-        pitch_shift(chunk, sr, n_steps, formant_preserve=formant_preserve)
-        if abs(n_steps) >= 1e-4
-        else chunk
-    )
     left = a - a0
-    core = shifted[left : left + raw_n]
-    if len(core) < max(64, raw_n // 4):
-        core = fit_length(shifted, raw_n)
-
-    if len(core) != target_n and len(core) > 32:
-        rate = len(core) / float(target_n)
-        core = time_stretch(core, sr, rate)
+    rate = raw_n / float(target_n)
+    needs_pitch = abs(n_steps) >= 1e-4
+    needs_stretch = abs(rate - 1.0) >= 1e-4
+    if needs_pitch and needs_stretch:
+        transformed = pitch_time_transform(
+            chunk,
+            sr,
+            n_steps=n_steps,
+            rate=rate,
+            formant_preserve=formant_preserve,
+        )
+        # Padding was transformed too; map the original event start through the
+        # tempo ratio before extracting the target-length core.
+        left_out = int(round(left / float(np.clip(rate, 0.5, 2.0))))
+        core = transformed[left_out : left_out + target_n]
+    else:
+        shifted = (
+            pitch_shift(chunk, sr, n_steps, formant_preserve=formant_preserve)
+            if needs_pitch
+            else chunk
+        )
+        core = shifted[left : left + raw_n]
+        if len(core) < max(64, raw_n // 4):
+            core = fit_length(shifted, raw_n)
+        if needs_stretch and len(core) > 32:
+            core = time_stretch(core, sr, rate)
     out = fit_length(core, target_n)
     if cache is not None:
         cache[key] = out

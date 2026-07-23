@@ -32,6 +32,24 @@ export function StatsPanel({ mosaic }: Props) {
           {s.fidelity_first ? 'fidelity first' : 'balanced'} · {s.embedding_backend ?? 'mosaic'}
         </span>
       </div>
+      <div className="stat">
+        <span className="stat-k">Renderer</span>
+        <span className="stat-v">
+          {s.reconstruction_backend === 'nmf' ? 'sparse diagonal NMF' : 'unit selection'}
+          {s.reconstruction_backend_requested === 'auto' && (
+            <span className="muted"> · auto {s.nmf_accepted ? 'accepted NMF' : 'kept baseline'}</span>
+          )}
+        </span>
+      </div>
+      {s.nmf && (
+        <div className="stat">
+          <span className="stat-k">NMF activations</span>
+          <span className="stat-v">
+            {s.nmf.active_polyphony.toFixed(1)} voices · {s.nmf.source_frames.toLocaleString()} source
+            frames
+          </span>
+        </div>
+      )}
       {s.stage_timings_s && (
         <div className="stat">
           <span className="stat-k">Stage timings</span>

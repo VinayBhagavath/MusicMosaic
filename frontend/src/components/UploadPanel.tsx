@@ -59,6 +59,7 @@ export function UploadPanel({ onSubmit, busy }: Props) {
     max_share: 1,
     n_layers: 1,
     fidelity_first: true,
+    reconstruction_backend: 'auto',
     use_stems: false,
   })
 
@@ -268,6 +269,25 @@ export function UploadPanel({ onSubmit, busy }: Props) {
 
       {showAdvanced && (
         <div className="advanced">
+          <label style={{ gridColumn: '1 / -1' }}>
+            Reconstruction
+            <select
+              value={params.reconstruction_backend}
+              onChange={(e) =>
+                setParams((p) => ({
+                  ...p,
+                  reconstruction_backend: e.target.value as
+                    | 'auto'
+                    | 'unit'
+                    | 'nmf',
+                }))
+              }
+            >
+              <option value="auto">Auto — use NMF only when measured better</option>
+              <option value="nmf">NMF spectral mosaic</option>
+              <option value="unit">Unit-selection only</option>
+            </select>
+          </label>
           <label style={{ gridColumn: '1 / -1' }}>
             <input
               type="checkbox"

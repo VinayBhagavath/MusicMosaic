@@ -11,6 +11,9 @@ After a match is chosen, each note is transformed hard toward the target window:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import local
+
 import numpy as np
 
 from app.pipeline.cohesion import (
@@ -179,9 +182,12 @@ def _compute_seam_xf(
     onset_samples: np.ndarray | None,
     onset_tol: int,
 ) -> list[int]:
-    """Per-seam crossfade length. Seams that land on a target onset collapse to
-    the click-guard minimum so sharp attacks stay punchy; sustained seams keep
-    the full ~30 ms equal-power crossfade."""
+    """Per-seam crossfade length.
+
+    Target attacks use a shorter fade to stay punchy, but retain enough overlap
+    to avoid the grainy near-hard splices produced by a click-guard-only fade.
+    Sustained seams keep the full ~30 ms equal-power crossfade.
+    """
     n = len(spans)
     seam_xf = [0] * n
     for i in range(n - 1):
@@ -191,9 +197,10 @@ def _compute_seam_xf(
             boundary = positions[i + 1]
             nearest = int(np.min(np.abs(onset_samples - boundary)))
             if nearest <= onset_tol:
-                # Onset-synchronous seam: shorten to the click guard so the
-                # incoming transient is not smeared by a long fade-in.
-                seam = min(seam, max(1, min(click_guard, spans[i], spans[i + 1])))
+                # Keep about one third of the normal overlap at attacks. At
+                # 22.05 kHz this is ~10 ms rather than the previous ~4 ms.
+                onset_xf = max(click_guard, int(round(xf * 0.35)))
+                seam = min(seam, max(1, min(onset_xf, spans[i], spans[i + 1])))
         seam_xf[i] = seam
     return seam_xf
 
@@ -251,12 +258,20 @@ def _layer_audio(
     if song is None:
         return np.zeros(win, dtype=np.float32)
 
-    # Raw source window for F0 estimate (before pitch)
+    # Use the detected source event duration instead of blindly taking a
+    # target-sized slice. This lets Rubber Band map the source note's attack and
+    # release onto the target note length.
+    source_n = win
+    meta = source.meta[layer.source_id] if 0 <= layer.source_id < len(source.meta) else None
+    if meta is not None:
+        source_n = max(64, int(round((meta.end_s - meta.start_s) * sr)))
+
+    # Raw source event for F0 estimate (before pitch)
     a = int(round(layer.source_start_s * sr))
-    src_chunk = song[a : a + win]
-    if len(src_chunk) < win:
-        src_chunk = fit_length(src_chunk.astype(np.float32), win)
-    f0_key = (layer.source_id, win, role, bool(stems))
+    src_chunk = song[a : a + source_n]
+    if len(src_chunk) < source_n:
+        src_chunk = fit_length(src_chunk.astype(np.float32), source_n)
+    f0_key = (layer.source_id, source_n, role, bool(stems))
     if role != "drums" and f0_key not in f0_cache:
         f0_cache[f0_key] = estimate_f0_hz(src_chunk, sr)
 
@@ -278,6 +293,7 @@ def _layer_audio(
             sr,
             layer.source_start_s,
             target_n=win,
+            source_n=source_n,
             n_steps=steps,
             cache=shift_cache,
             cache_key=f"{layer.song_id}:{layer.role}:{round(steps, 1)}",
@@ -385,9 +401,7 @@ def reconstruct_ola(
     out_len = int(round(target_duration_s * sr))
     acc = np.zeros(out_len + max_win + 8, dtype=np.float32)
     wsum = np.zeros_like(acc)
-    shift_cache: dict = {}
-    f0_cache: dict = {}
-
+    power_sum = np.zeros_like(acc)
     target_cents = 0.0
     song_cents: dict[str, float] = {}
     if target_audio is not None and apply_key_shift:
@@ -404,12 +418,22 @@ def reconstruct_ola(
         _target_slice(target_audio, sr, tile.target_start_s, render_lens[i])
         for i, tile in enumerate(tiles)
     ]
-    ref_f0s = [
-        estimate_f0_hz(ref, sr) if ref is not None and apply_key_shift else None
-        for ref in refs
-    ]
+    def _ref_f0(ref: np.ndarray | None) -> float | None:
+        return estimate_f0_hz(ref, sr) if ref is not None and apply_key_shift else None
 
-    for ti, tile in enumerate(tiles):
+    if apply_key_shift and len(refs) > 1:
+        with ThreadPoolExecutor(max_workers=min(4, len(refs))) as pool:
+            ref_f0s = list(pool.map(_ref_f0, refs))
+    else:
+        ref_f0s = [_ref_f0(ref) for ref in refs]
+
+    thread_state = local()
+
+    def _render_tile(item: tuple[int, TileMatch]) -> np.ndarray:
+        ti, tile = item
+        if not hasattr(thread_state, "shift_cache"):
+            thread_state.shift_cache = {}
+            thread_state.f0_cache = {}
         win = render_lens[ti]
         layers = _tile_layers(tile)
         multi_layer = len(layers) > 1
@@ -426,11 +450,11 @@ def reconstruct_ola(
                 win=win,
                 apply_key_shift=apply_key_shift,
                 fine_cents=fine,
-                shift_cache=shift_cache,
+                shift_cache=thread_state.shift_cache,
                 stems=stems,
                 multi_layer=multi_layer,
                 ref=ref,
-                f0_cache=f0_cache,
+                f0_cache=thread_state.f0_cache,
                 ref_f0=ref_f0s[ti],
             )
             if li == 0:
@@ -491,7 +515,21 @@ def reconstruct_ola(
         peak = float(np.max(np.abs(mix))) + 1e-9
         if abs(m) < 0.2 * peak:
             mix = mix - m
+        return mix.astype(np.float32, copy=False)
 
+    items = list(enumerate(tiles))
+    # Rubber Band runs out-of-process and the spectral transforms release the
+    # GIL, so tile rendering scales well across a small worker pool. Keeping
+    # caches thread-local avoids races while still reusing work on each worker.
+    workers = min(4, len(items))
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            mixes = list(pool.map(_render_tile, items))
+    else:
+        mixes = [_render_tile(item) for item in items]
+
+    for ti, mix in enumerate(mixes):
+        win = render_lens[ti]
         pos = positions[ti]
         if pos >= out_len:
             continue
@@ -508,9 +546,31 @@ def reconstruct_ola(
         span = end - pos
         acc[pos:end] += mix[:span] * env[:span]
         wsum[pos:end] += env[:span]
+        power_sum[pos:end] += env[:span] * env[:span]
 
-    nz = wsum > 1e-6
-    acc[nz] /= wsum[nz]
+    # Preserve linear/correlation-safe fades for natural continuations, but use
+    # true constant-power normalization when unrelated source clips meet. The
+    # previous linear normalization attenuated independent signals around every
+    # switch, which was audible as repeated muffled level dips.
+    denom = wsum.copy()
+    for i in range(len(tiles) - 1):
+        xf = seam_xf[i]
+        if xf <= 0:
+            continue
+        step_s = max(1, positions[i + 1] - positions[i]) / sr
+        expected = tiles[i].source_start_s + step_s
+        natural = (
+            tiles[i].song_id == tiles[i + 1].song_id
+            and abs(expected - tiles[i + 1].source_start_s)
+            <= max(0.06, step_s * 0.55)
+        )
+        if natural:
+            continue
+        a = max(0, positions[i + 1])
+        b = min(len(denom), a + xf)
+        denom[a:b] = np.sqrt(np.maximum(power_sum[a:b], 1e-12))
+    nz = denom > 1e-6
+    acc[nz] /= denom[nz]
     out = acc[:out_len]
 
     # Global click-guard so the very first/last samples ramp from/to zero.

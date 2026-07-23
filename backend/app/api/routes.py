@@ -131,6 +131,7 @@ def _run(
             harmonic_strength=params.harmonic_strength,
             onset_sync_xf=params.onset_sync_xf,
             rerank_spectral=params.rerank_spectral,
+            reconstruction_backend=params.reconstruction_backend,
             use_stems=params.use_stems,
         )
         result = run_job(
@@ -186,9 +187,10 @@ async def create_job(
     layer_primary_weight: float = Form(0.62),
     fidelity_first: bool = Form(True),
     harmonic_match: bool = Form(True),
-    harmonic_strength: float = Form(0.55),
+    harmonic_strength: float = Form(0.42),
     onset_sync_xf: bool = Form(True),
     rerank_spectral: bool = Form(True),
+    reconstruction_backend: str = Form("auto"),
     use_stems: bool = Form(False),
 ) -> JobCreateResponse:
     try:
@@ -214,6 +216,7 @@ async def create_job(
             harmonic_strength=harmonic_strength,
             onset_sync_xf=onset_sync_xf,
             rerank_spectral=rerank_spectral,
+            reconstruction_backend=reconstruction_backend,
             use_stems=use_stems,
         )
     except ValidationError as e:

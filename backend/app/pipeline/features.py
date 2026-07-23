@@ -56,6 +56,7 @@ class EmbPack:
     backend: str = "mosaic"  # mosaic | handcrafted | clap-hybrid
     temporal: np.ndarray | None = None  # [n, TEMPORAL_BINS * 12] chroma trajectory
     register: np.ndarray | None = None  # [n, REGISTER_BANDS] octave/register profile
+    level: np.ndarray | None = None  # [n, 1] absolute segment level after track normalization
 
 
 def _temporal_pool(x: np.ndarray, bins: int = TEMPORAL_BINS) -> np.ndarray:
@@ -91,37 +92,66 @@ class MusicalExtractor:
 
     def _frames(self, y: np.ndarray, sr: int) -> tuple[np.ndarray, ...]:
         kw = dict(n_fft=self.n_fft, hop_length=self.hop_length)
+        # Most librosa feature helpers compute their own STFT when given audio.
+        # Share one spectrum across the descriptors instead: on full songs this
+        # avoids five redundant transforms per track.
+        spectrum = np.abs(
+            librosa.stft(
+                y.astype(np.float32, copy=False),
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+            )
+        ).astype(np.float32)
+        power = spectrum * spectrum
+        mel_power = librosa.feature.melspectrogram(
+            S=power,
+            sr=sr,
+            n_mels=128,
+            fmax=sr / 2,
+        )
+        # Match librosa.feature.mfcc(y=...) semantics (absolute dB reference);
+        # onset strength intentionally uses a peak-relative spectrogram.
+        mel_db = librosa.power_to_db(mel_power)
+        onset_db = librosa.power_to_db(mel_power, ref=np.max)
         if self.use_cqt_chroma:
             try:
                 chroma = librosa.feature.chroma_cqt(
                     y=y, sr=sr, hop_length=self.hop_length, n_chroma=12
                 )
             except Exception:
-                chroma = librosa.feature.chroma_stft(y=y, sr=sr, **kw)
+                chroma = librosa.feature.chroma_stft(S=power, sr=sr, **kw)
         else:
-            chroma = librosa.feature.chroma_stft(y=y, sr=sr, **kw)
+            chroma = librosa.feature.chroma_stft(S=power, sr=sr, **kw)
 
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=self.n_mfcc, **kw)
+        mfcc = librosa.feature.mfcc(S=mel_db, sr=sr, n_mfcc=self.n_mfcc)
         # Spectral contrast: band-wise peak-to-valley — strong timbre cue beyond MFCC
-        contrast = librosa.feature.spectral_contrast(y=y, sr=sr, **kw)
-        cent = librosa.feature.spectral_centroid(y=y, sr=sr, **kw)
-        flat = librosa.feature.spectral_flatness(y=y, **kw)
-        rms = librosa.feature.rms(y=y, frame_length=self.n_fft, hop_length=self.hop_length)
-        onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=self.hop_length)
+        contrast = librosa.feature.spectral_contrast(S=spectrum, sr=sr)
+        cent = librosa.feature.spectral_centroid(S=spectrum, sr=sr)
+        flat = librosa.feature.spectral_flatness(S=spectrum)
+        # Time-domain RMS is cheap and avoids the Hann-window bias incurred by
+        # deriving RMS from the shared STFT magnitude.
+        rms = librosa.feature.rms(
+            y=y,
+            frame_length=self.n_fft,
+            hop_length=self.hop_length,
+        )
+        onset = librosa.onset.onset_strength(
+            S=onset_db,
+            sr=sr,
+            hop_length=self.hop_length,
+        )
         onset = np.atleast_2d(onset)
         # Coarse log-frequency energy retains register/octave information that
         # pitch-class chroma intentionally discards.
+        register_basis = librosa.filters.mel(
+            sr=sr,
+            n_fft=self.n_fft,
+            n_mels=REGISTER_BANDS,
+            fmin=32.0,
+            fmax=min(sr / 2, 8000.0),
+        )
         register = np.log1p(
-            librosa.feature.melspectrogram(
-                y=y,
-                sr=sr,
-                n_fft=self.n_fft,
-                hop_length=self.hop_length,
-                n_mels=REGISTER_BANDS,
-                fmin=32.0,
-                fmax=min(sr / 2, 8000.0),
-                power=1.0,
-            )
+            register_basis @ spectrum
         )
 
         n = min(
@@ -147,7 +177,7 @@ class MusicalExtractor:
 
     def _chroma_energy(
         self, y: np.ndarray, sr: int, segments: list[Segment], on_progress: ProgressCb | None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
         """Legacy helper used by CLAP path: chroma + energy + optional mfcc-timbre."""
         n = len(segments)
         if on_progress:
@@ -159,6 +189,7 @@ class MusicalExtractor:
         chroma = np.empty((n, 12), np.float32)
         timbre = np.empty((n, self.n_mfcc * 2), np.float32)
         energy = np.empty((n, ENERGY_DIM), np.float32)
+        level = np.empty((n, 1), np.float32)
         report_every = max(1, n // 5)
         for i, seg in enumerate(segments):
             f0 = int(seg.start_s * sr) // self.hop_length
@@ -179,9 +210,11 @@ class MusicalExtractor:
                     ),
                 ]
             )
+            rms_mean = float(rms_f[:, f0:f1].mean())
+            level[i, 0] = np.clip((20.0 * np.log10(rms_mean + 1e-8) + 60.0) / 60.0, 0.0, 1.0)
             if on_progress and (i % report_every == 0 or i == n - 1):
                 on_progress(0.1 + 0.45 * (i + 1) / n, f"windows {i + 1}/{n}")
-        return _l2_rows(chroma), _l2_rows(energy), _l2_rows(timbre)
+        return _l2_rows(chroma), _l2_rows(energy), _l2_rows(timbre), level
 
     def embed_segments(
         self,
@@ -218,6 +251,7 @@ class MusicalExtractor:
         energy = np.empty((n, self.energy_dim), np.float32)
         temporal = np.empty((n, TEMPORAL_BINS * 12), np.float32)
         register = np.empty((n, REGISTER_BANDS), np.float32)
+        level = np.empty((n, 1), np.float32)
         report_every = max(1, n // 5)
 
         for i, seg in enumerate(segments):
@@ -248,6 +282,8 @@ class MusicalExtractor:
                 ],
                 dtype=np.float32,
             )
+            rms_mean = float(rms_f[:, f0:f1].mean())
+            level[i, 0] = np.clip((20.0 * np.log10(rms_mean + 1e-8) + 60.0) / 60.0, 0.0, 1.0)
 
             if on_progress and (i % report_every == 0 or i == n - 1):
                 on_progress(0.1 + 0.85 * (i + 1) / n, f"windows {i + 1}/{n}")
@@ -259,6 +295,7 @@ class MusicalExtractor:
             backend=self.name,
             temporal=_l2_rows(temporal),
             register=_l2_rows(register),
+            level=level,
         )
 
 
@@ -395,7 +432,7 @@ class ClapHybridExtractor:
                 backend=self.name,
             )
 
-        chroma, energy, _mfcc = self.base._chroma_energy(y, sr, segments, on_progress)
+        chroma, energy, _mfcc, level = self.base._chroma_energy(y, sr, segments, on_progress)
         self._ensure_model()
 
         if sr != CLAP_SR:
@@ -448,6 +485,7 @@ class ClapHybridExtractor:
             timbre=_l2_rows(timbre),
             energy=energy,
             backend=self.name,
+            level=level,
         )
 
 

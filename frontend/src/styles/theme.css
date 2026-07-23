@@ -374,7 +374,8 @@ body {
   text-transform: uppercase;
 }
 
-.advanced input {
+.advanced input,
+.advanced select {
   background: var(--white);
   border: 1px solid var(--line);
   color: var(--ink);

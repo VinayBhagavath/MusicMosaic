@@ -88,8 +88,7 @@ def test_transitions_are_click_free_across_distinct_sources():
 
 
 def test_onset_synchronous_seam_shortens_crossfade_at_attacks():
-    """Seams landing on a target onset collapse to the click guard; sustained
-    seams keep the full ~30 ms crossfade so only attacks stay punchy."""
+    """Target attacks use shorter overlaps; sustained seams keep ~30 ms."""
     sr = 22050
     spans = [sr // 2, sr // 2, sr // 2]
     positions = [0, sr // 2, sr]
@@ -112,8 +111,9 @@ def test_onset_synchronous_seam_shortens_crossfade_at_attacks():
         xf_target=xf_target, click_guard=click_guard,
         onset_samples=onset, onset_tol=onset_tol,
     )
-    # Attack seam collapses to (at most) the click guard...
-    assert with_onset[0] <= click_guard
+    # Attack seam stays shorter than a sustained seam, but keeps enough overlap
+    # to avoid a grainy near-hard splice.
+    assert with_onset[0] > click_guard
     assert with_onset[0] < no_onset[0]
     # ...while the non-onset seam keeps the full crossfade.
     assert with_onset[1] == xf_target

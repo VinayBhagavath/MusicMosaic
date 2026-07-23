@@ -42,6 +42,7 @@ class MatchParams:
     n_layers: int = 1
     layer_primary_weight: float = 0.62
     fidelity_first: bool = True
+    lambda_duration: float = 0.12
 
 
 @dataclass(slots=True)
@@ -659,6 +660,23 @@ def match_sequence(
     iters = max(1, params.balance_iters if params.lambda_balance > 0 else 1)
     for it in range(iters):
         local = (1.0 - sims).astype(np.float64)
+        if target_durations is not None:
+            # Note length is musically meaningful independently of pitch and
+            # timbre. Prefer source events requiring less time-stretch; use a
+            # log ratio so half/double duration receive the same penalty.
+            valid_ids = np.maximum(ids, 0)
+            source_durations = np.asarray(
+                [max(0.02, m.end_s - m.start_s) for m in source.meta],
+                dtype=np.float64,
+            )[valid_ids]
+            target_duration_matrix = np.maximum(
+                np.asarray(target_durations, dtype=np.float64)[:, None],
+                0.02,
+            )
+            duration_error = np.abs(
+                np.log(source_durations / target_duration_matrix)
+            )
+            local += params.lambda_duration * np.clip(duration_error, 0.0, 1.5)
         if params.lambda_balance > 0:
             for t in range(n):
                 for j in range(k):

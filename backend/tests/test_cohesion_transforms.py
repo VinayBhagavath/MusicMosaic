@@ -35,7 +35,14 @@ def test_pitch_shift_fractional_runs():
 def test_prepare_clip_fits_target_n():
     sr = 22050
     song = np.sin(2 * np.pi * 330 * np.arange(sr * 3) / sr).astype(np.float32) * 0.2
-    clip = prepare_clip(song, sr, 0.5, target_n=sr, n_steps=2.0)
+    clip = prepare_clip(
+        song,
+        sr,
+        0.5,
+        target_n=sr,
+        source_n=sr // 2,
+        n_steps=2.0,
+    )
     assert len(clip) == sr
 
 

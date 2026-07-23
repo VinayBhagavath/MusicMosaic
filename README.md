@@ -22,13 +22,20 @@ beam is **re-ranked by the actual post-transform spectral distance** to its targ
 just pre-transform feature similarity). The best sequence is pitch/time transformed with Rubber
 Band and morphed toward the target envelope and spectrum.
 
-**Legibility:** to make the result recognizable as the target song — not just similar in texture —
-each note gets a **harmonic-reconstruction pass** (inspired by Driedger et al., *Let It Bee*,
-ISMIR 2015). Where `match_spectrum` transfers only the smooth tonal envelope (keeping timbre but
-leaving the source's own pitches), this pass keeps the source envelope but morphs the harmonic
-fine structure — *which notes are sounding* — toward the target, so melody and chords read
-through. Seams are **onset-synchronous**: crossfades collapse to a click-guard minimum on target
-attacks (punchy transients) and keep the full ~30 ms equal-power fade on sustained boundaries.
+**Legibility:** the default `auto` renderer now tests a **full-song sparse diagonal NMF spectral
+mosaic**, based on Driedger et al., *Let It Bee* (ISMIR 2015), against the unit reconstruction.
+It learns `target magnitude V ≈ fixed source spectra W × sparse activations H`, while suppressing
+repeated frames, limiting polyphony, and rewarding time-continuous diagonal source runs. The
+existing source-only unit renderer supplies coherent phase; NMF supplies the more accurate
+source-basis notes/chords. Auto mode accepts NMF only when a conservative gate improves combined
+chroma, onset, and log-mel diagnostics without materially regressing any one of them. Otherwise
+the existing unit renderer remains the result. On the included Interstellar preset, the measured
+comparison improved chroma `0.729 → 0.805`, onset correlation `0.258 → 0.638`, and log-mel
+distance `0.758 → 0.543` (lower is better).
+
+The unit renderer still applies per-note harmonic reconstruction and onset-synchronous seams:
+target attacks use a short ~10 ms overlap to stay crisp without grainy hard splices, while
+sustained boundaries keep the full ~30 ms equal-power fade.
 
 Fidelity mode deliberately does **not** force equal use of all five songs: a source may dominate
 when it is the closest acoustic match. Turn Fidelity first off in Advanced parameters for a more

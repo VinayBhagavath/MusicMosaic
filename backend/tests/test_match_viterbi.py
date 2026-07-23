@@ -118,6 +118,40 @@ def test_viterbi_prefers_continuity_over_greedy_switch():
     assert smooth.transitions_viterbi <= 2
 
 
+def test_matching_accounts_for_note_level_and_duration():
+    common_chroma = _unit(np.array([1.0] + [0.0] * 11, np.float32))
+    common_timbre = _unit(np.array([1.0] + [0.0] * 25, np.float32))
+    common_energy = _unit(np.array([1.0, 0.1, 0.2, 0.05], np.float32))
+    source_pack = EmbPack(
+        chroma=np.stack([common_chroma, common_chroma]),
+        timbre=np.stack([common_timbre, common_timbre]),
+        energy=np.stack([common_energy, common_energy]),
+        level=np.array([[0.2], [0.8]], dtype=np.float32),
+    )
+    source = build_source_index(
+        [
+            Segment("A", 0, 0.0, 0.2, np.zeros(64, np.float32)),
+            Segment("B", 0, 0.0, 0.8, np.zeros(64, np.float32)),
+        ],
+        source_pack,
+    )
+    query = EmbPack(
+        chroma=common_chroma[None, :],
+        timbre=common_timbre[None, :],
+        energy=common_energy[None, :],
+        level=np.array([[0.8]], dtype=np.float32),
+    )
+
+    result = match_sequence(
+        query,
+        np.array([0.0]),
+        source,
+        MatchParams(top_k=2, lambda_duration=0.5),
+        target_durations=np.array([0.8]),
+    )
+    assert result.tiles[0].source_id == 1
+
+
 def test_balance_prevents_single_song_domination():
     """When A is a near-perfect match to the target, balance still leaves room for B."""
     segs: list[Segment] = []

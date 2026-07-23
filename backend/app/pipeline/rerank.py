@@ -19,7 +19,11 @@ import numpy as np
 
 from app.pipeline.index import SourceIndex
 from app.pipeline.match import LayerMatch, TileMatch
-from app.pipeline.transform import estimate_f0_hz, fit_length, prepare_clip
+from app.pipeline.transform import (
+    estimate_f0_hz,
+    fit_length,
+    prepare_clip,
+)
 
 
 def _spectral_distance(y: np.ndarray, ref: np.ndarray, sr: int) -> float:
@@ -76,9 +80,10 @@ def _candidate_clip(
         else:
             return None
     a = int(round(meta.start_s * sr))
-    src_chunk = song[a : a + win]
-    if len(src_chunk) < win:
-        src_chunk = fit_length(src_chunk.astype(np.float32), win)
+    source_n = max(64, int(round((meta.end_s - meta.start_s) * sr)))
+    src_chunk = song[a : a + source_n]
+    if len(src_chunk) < source_n:
+        src_chunk = fit_length(src_chunk.astype(np.float32), source_n)
 
     # Mirror reconstruction's pitch policy: prefer per-window F0 match.
     steps = float(key_shift)
@@ -99,6 +104,7 @@ def _candidate_clip(
             sr,
             meta.start_s,
             target_n=win,
+            source_n=source_n,
             n_steps=steps,
             cache=shift_cache,
             cache_key=f"rerank:{meta.song_id}:{round(steps, 1)}",
@@ -117,7 +123,7 @@ def rerank_tiles_spectral(
     sim_ceiling: float = 0.985,
     beam_margin: float = 0.04,
     improve_margin: float = 0.04,
-    max_tiles: int = 400,
+    max_tiles: int = 160,
 ) -> int:
     """Re-rank each note's beam by post-transform spectral distance in place.
 

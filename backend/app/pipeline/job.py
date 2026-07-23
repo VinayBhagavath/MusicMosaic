@@ -15,7 +15,11 @@ from app.pipeline.audio_io import load_and_normalize, write_wav
 from app.pipeline.features import EmbPack, get_extractor
 from app.pipeline.index import build_source_index
 from app.pipeline.match import MatchParams, match_sequence
-from app.pipeline.metrics import quality_metrics
+from app.pipeline.metrics import (
+    boundary_discontinuity,
+    candidate_improves,
+    quality_metrics,
+)
 from app.pipeline.palette import SONG_COLORS, SONG_IDS
 from app.pipeline.reconstruct import reconstruct_ola
 from app.pipeline.segment import segment_audio
@@ -53,10 +57,15 @@ class JobConfig:
     transient_match: bool = True
     spectral_strength: float = 0.7
     harmonic_match: bool = True
-    harmonic_strength: float = 0.55
+    harmonic_strength: float = 0.42
     onset_sync_xf: bool = True
     rerank_spectral: bool = True
-    rerank_top_m: int = 4
+    rerank_top_m: int = 3
+    # unit: existing concatenative renderer; nmf: force sparse diagonal NMF;
+    # auto: render both and accept NMF only through the objective quality gate.
+    reconstruction_backend: str = "auto"
+    nmf_iterations: int = 8
+    nmf_polyphony: int = 3
     use_stems: bool = False
     prefer_clap: bool = False
 
@@ -101,6 +110,7 @@ def _stack_packs(parts: list[EmbPack]) -> EmbPack:
         backend=parts[0].backend if parts else "handcrafted",
         temporal=optional_stack("temporal"),
         register=optional_stack("register"),
+        level=optional_stack("level"),
     )
 
 
@@ -227,7 +237,11 @@ def run_job(
     prog("index", 72, "Indexing source clips")
     songs_map = {sid: y for sid, y in sources_typed}  # type: ignore[misc]
     source_index = build_source_index(
-        source_segs, source_pack, songs=songs_map, sr=sr, compute_edges=True
+        source_segs,
+        source_pack,
+        songs=songs_map,
+        sr=sr,
+        compute_edges=True,
     )
     _mark("index")
 
@@ -298,8 +312,8 @@ def run_job(
             prog("reconstruct", 88, "Demucs not installed — full-mix layers")
         _mark("stems")
 
-    prog("reconstruct", 90, "Cohesive reconstruction")
-    recon = reconstruct_ola(
+    prog("reconstruct", 90, "Cohesive unit reconstruction")
+    unit_recon = reconstruct_ola(
         match.tiles,
         source_index,
         sr=sr,
@@ -317,53 +331,157 @@ def run_job(
         harmonic_strength=cfg.harmonic_strength,
         onset_sync_xf=cfg.onset_sync_xf,
     )
+    _mark("reconstruct_unit")
+
+    requested_backend = cfg.reconstruction_backend.lower().strip()
+    if requested_backend not in {"auto", "unit", "nmf"}:
+        raise ValueError(
+            "reconstruction_backend must be one of: auto, unit, nmf"
+        )
+
+    recon = unit_recon
+    selected_backend = "unit"
+    unit_quality: dict[str, float] | None = None
+    nmf_quality: dict[str, float] | None = None
+    nmf_result = None
+    nmf_accepted = False
+    selected_contribution = _contrib(match.tiles, SONG_IDS)
+
+    if requested_backend != "unit":
+        from app.pipeline.nmf import NMFParams, reconstruct_nmf
+
+        prog("reconstruct", 92, "Sparse diagonal NMF spectral mosaic")
+        nmf_result = reconstruct_nmf(
+            target_y,
+            songs_map,
+            sr,
+            params=NMFParams(
+                iterations=cfg.nmf_iterations,
+                polyphony=cfg.nmf_polyphony,
+            ),
+            # The unit renderer is source-only and provides temporally coherent
+            # phase; NMF supplies the more target-legible source-basis magnitude.
+            phase_reference=unit_recon,
+            on_progress=lambda f, m: prog("reconstruct", 92 + 5 * f, m),
+        )
+        _mark("reconstruct_nmf")
+        nmf_quality = quality_metrics(
+            target_y,
+            nmf_result.audio,
+            sr,
+            boundaries_s=target_starts[1:],
+        )
+        if requested_backend == "nmf":
+            nmf_accepted = True
+        else:
+            unit_quality = quality_metrics(
+                target_y,
+                unit_recon,
+                sr,
+                boundaries_s=target_starts[1:],
+            )
+            nmf_accepted = candidate_improves(unit_quality, nmf_quality)
+        if nmf_accepted:
+            recon = nmf_result.audio
+            selected_backend = "nmf"
+            selected_contribution = nmf_result.contribution_pct
+            # Keep the baseline for direct local A/B and debugging.
+            write_wav(out / "reconstructed_unit.wav", unit_recon, sr)
+
     audio_path = out / "reconstructed.wav"
     write_wav(audio_path, recon, sr)
-    _mark("reconstruct")
     prog("reconstruct", 98, "Measuring reconstruction quality")
-    audio_quality = quality_metrics(
-        target_y,
-        recon,
-        sr,
-        boundaries_s=target_starts[1:],
-    )
+    if selected_backend == "nmf" and nmf_quality is not None:
+        audio_quality = {
+            **nmf_quality,
+            "boundary_discontinuity": round(
+                boundary_discontinuity(recon, sr, target_starts[1:]), 4
+            ),
+        }
+    elif unit_quality is not None:
+        audio_quality = {
+            **unit_quality,
+            "boundary_discontinuity": round(
+                boundary_discontinuity(recon, sr, target_starts[1:]), 4
+            ),
+        }
+    else:
+        audio_quality = quality_metrics(
+            target_y,
+            recon,
+            sr,
+            boundaries_s=target_starts[1:],
+        )
     _mark("quality")
 
     songs = [
         {"id": SONG_IDS[i], "name": names[i], "color": SONG_COLORS[i]}
         for i in range(5)
     ]
+
+    def _tile_payload(t) -> dict:
+        if (
+            selected_backend == "nmf"
+            and nmf_result is not None
+            and nmf_result.frame_song_ids
+        ):
+            frame = int(
+                np.clip(
+                    round(t.target_start_s * sr / nmf_result.hop_length),
+                    0,
+                    len(nmf_result.frame_song_ids) - 1,
+                )
+            )
+            song_id = nmf_result.frame_song_ids[frame]
+            source_start_s = float(nmf_result.frame_source_times_s[frame])
+            similarity = float(nmf_result.frame_weights[frame])
+            layers = [
+                {
+                    "song_id": song_id,
+                    "source_start_s": source_start_s,
+                    "similarity": round(similarity, 4),
+                    "weight": 1.0,
+                    "key_shift": 0.0,
+                    "role": "spectral",
+                }
+            ]
+            key_shift = 0.0
+        else:
+            song_id = t.song_id
+            source_start_s = t.source_start_s
+            similarity = t.similarity
+            key_shift = float(t.key_shift)
+            layers = [
+                {
+                    "song_id": ly.song_id,
+                    "source_start_s": ly.source_start_s,
+                    "similarity": round(ly.similarity, 4),
+                    "weight": round(ly.weight, 4),
+                    "key_shift": round(float(ly.key_shift), 3),
+                    "role": ly.role,
+                }
+                for ly in t.layers
+            ]
+        return {
+            "i": t.target_idx,
+            "target_start_s": t.target_start_s,
+            "target_duration_s": t.target_duration_s,
+            "song_id": song_id,
+            "source_start_s": source_start_s,
+            "similarity": round(similarity, 4),
+            "key_shift": round(key_shift, 3),
+            "layers": layers,
+        }
+
     mosaic = {
         "window_s": cfg.window_s,
         "hop_s": cfg.hop_s,
         "duration_s": target_duration_s,
         "sr": sr,
         "songs": songs,
-        "tiles": [
-            {
-                "i": t.target_idx,
-                "target_start_s": t.target_start_s,
-                "target_duration_s": t.target_duration_s,
-                "song_id": t.song_id,
-                "source_start_s": t.source_start_s,
-                "similarity": round(t.similarity, 4),
-                "key_shift": round(float(t.key_shift), 3),
-                "layers": [
-                    {
-                        "song_id": ly.song_id,
-                        "source_start_s": ly.source_start_s,
-                        "similarity": round(ly.similarity, 4),
-                        "weight": round(ly.weight, 4),
-                        "key_shift": round(float(ly.key_shift), 3),
-                        "role": ly.role,
-                    }
-                    for ly in t.layers
-                ],
-            }
-            for t in match.tiles
-        ],
+        "tiles": [_tile_payload(t) for t in match.tiles],
         "stats": {
-            "contribution_pct": _contrib(match.tiles, SONG_IDS),
+            "contribution_pct": selected_contribution,
             "avg_similarity": round(match.avg_similarity, 4),
             "num_transitions": match.transitions_viterbi,
             "transitions_viterbi": match.transitions_viterbi,
@@ -387,6 +505,21 @@ def run_job(
             "onset_sync_xf": cfg.onset_sync_xf,
             "rerank_spectral": cfg.rerank_spectral,
             "rerank_swaps": rerank_swaps,
+            "reconstruction_backend_requested": requested_backend,
+            "reconstruction_backend": selected_backend,
+            "nmf_accepted": nmf_accepted,
+            "unit_quality": unit_quality,
+            "nmf_quality": nmf_quality,
+            "nmf": (
+                {
+                    "spectral_error": round(nmf_result.spectral_error, 6),
+                    "active_polyphony": round(nmf_result.active_polyphony, 3),
+                    "source_frames": nmf_result.n_source_frames,
+                    "target_frames": nmf_result.n_target_frames,
+                }
+                if nmf_result is not None
+                else None
+            ),
             "use_stems": bool(stems_map),
             "stage_timings_s": stage_timings,
         },
