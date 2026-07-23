@@ -1,6 +1,7 @@
 # MusicMosaic
 
 Reconstruct one song using only short clips from five other songs.
+![](mainpage.png)
 
 ## Quick start
 
